@@ -8,6 +8,7 @@ import zipfile
 import shutil
 import errno
 import numpy as np
+import threading
 
 # ──── Python 端殘局庫（保持穩定性） ────
 import chess
@@ -178,12 +179,15 @@ def _probe_syzygy(obs, action_mask):
 class Agent:
     def __init__(self):
         _bootstrap()
-        self.engine = _ENGINE_MODULE.SearchEngine()
-        self.engine.init("")
+        self._local = threading.local()
 
     def act(self, observation: np.ndarray, action_mask: np.ndarray) -> int:
+        if not hasattr(self._local, "engine"):
+            self._local.engine = _ENGINE_MODULE.SearchEngine()
+            self._local.engine.init("")
+            
         # 1. Python 端殘局庫探測（≤5 子時觸發）
         tb_action = _probe_syzygy(observation, action_mask)
 
         # 2. 呼叫 C++ 搜尋引擎
-        return int(self.engine.solve(observation, action_mask, tb_action))
+        return int(self._local.engine.solve(observation, action_mask, tb_action))
