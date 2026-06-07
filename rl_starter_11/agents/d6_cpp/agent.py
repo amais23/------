@@ -177,12 +177,18 @@ def _probe_syzygy(obs, action_mask):
 # ═══════════════════════════════════════════
 class Agent:
     def __init__(self):
-        _bootstrap()
-        self.engine = _ENGINE_MODULE.SearchEngine()
-        self.engine.init("")
+        try:
+            _bootstrap()
+            self.engine = _ENGINE_MODULE.SearchEngine()
+            self.engine.init("")
+        except Exception as e:
+            print(f"⚠️ SearchEngine loading failed: {e}. Falling back to random moves.")
+            self.engine = None
 
     def act(self, observation: np.ndarray, action_mask: np.ndarray) -> int:
         try:
+            if self.engine is None:
+                raise RuntimeError("Engine not loaded")
             # 1. Python 端殘局庫探測（≤5 子時觸發）
             tb_action = _probe_syzygy(observation, action_mask)
 
