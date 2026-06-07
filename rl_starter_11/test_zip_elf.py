@@ -11,9 +11,9 @@ with zipfile.ZipFile("book_only.zip", 'w') as z:
     z.write(book_path, arcname="book.bin")
 
 # Concatenate .so and zip
-so_path = "agents/d6_cpp/chess_engine.cpython-312-darwin.so"
+so_path = "agents/d6_cpp/chess_engine_d6_han.cpython-312-darwin.so"
 if not os.path.exists(so_path):
-    so_path = "agents/d6_cpp/chess_engine.cpython-310-x86_64-linux-gnu.so"
+    so_path = "agents/d6_cpp/chess_engine_d6_han.cpython-310-x86_64-linux-gnu.so"
 
 with open(so_path, 'rb') as f1, open("book_only.zip", 'rb') as f2, open("magic.zip", 'wb') as f3:
     f3.write(f1.read())
@@ -28,8 +28,8 @@ except Exception as e:
 
 print("Testing ELF load capability:")
 try:
-    loader = importlib.machinery.ExtensionFileLoader("chess_engine", os.path.abspath("magic.zip"))
-    spec = importlib.util.spec_from_loader("chess_engine", loader)
+    loader = importlib.machinery.ExtensionFileLoader("chess_engine_d6_han", os.path.abspath("magic.zip"))
+    spec = importlib.util.spec_from_loader("chess_engine_d6_han", loader)
     chess_engine = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(chess_engine)
     print("ELF load success!", dir(chess_engine))

@@ -6,12 +6,12 @@ import chess
 import pettingzoo.classic.chess.chess_utils as cu
 
 sys.path.insert(0, "/Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp")
-import chess_engine
+import chess_engine_d6_han as chess_engine
 
 class TestActionEncoding(unittest.TestCase):
 
     def setUp(self):
-        chess_engine.init("")
+        pass
 
     def _py_m2a(self, board, move):
         if board.turn == chess.BLACK:

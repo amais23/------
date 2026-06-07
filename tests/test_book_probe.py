@@ -5,7 +5,7 @@ import chess
 import chess.polyglot
 
 sys.path.insert(0, "/Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp")
-import chess_engine
+import chess_engine_d6_han as chess_engine
 
 class TestBookProbe(unittest.TestCase):
 
@@ -13,7 +13,6 @@ class TestBookProbe(unittest.TestCase):
     def setUpClass(cls):
         # 選擇一個小一點的 bin 檔案進行測試
         cls.book_path = "/Users/Shared/西洋棋代理人/Lichess_51_Books/Books/AlPhAbEtACeta.bin"
-        chess_engine.init(cls.book_path)
         cls.reader = chess.polyglot.open_reader(cls.book_path)
 
     def test_zobrist_hashing(self):

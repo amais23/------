@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "Building chess_engine.so..."
+echo "Building chess_engine_d6_han.so..."
 
 # Check if running inside docker or locally
 if [ -f "/opt/python/cp310-cp310/bin/python" ]; then
@@ -16,4 +16,4 @@ fi
 rm -rf build
 
 echo "Build successful! Library created:"
-ls -lh chess_engine*.so || ls -lh chess_engine*.pyd
+ls -lh chess_engine_d6_han*.so || ls -lh chess_engine_d6_han*.pyd

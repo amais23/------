@@ -18,14 +18,14 @@ class TestChessEngine(unittest.TestCase):
     def setUpClass(cls):
         """測試前置作業：嘗試載入編譯好的 C++ 核心"""
         try:
-            import chess_engine
-            cls.engine = chess_engine
+            import chess_engine_d6_han
+            cls.engine = chess_engine_d6_han.SearchEngine()
             # 初始化一個空的開局庫路徑進行測試
             cls.engine.init("")
-            print("✅ 成功載入 C++ chess_engine 模組，開始執行核心測試。")
+            print("✅ 成功載入 C++ chess_engine_d6_han 模組，開始執行核心測試。")
         except ImportError:
             raise unittest.SkipTest(
-                "❌ 找不到 chess_engine.so！請確認已在 manylinux 容器內編譯並重命名置於 /tmp 下。"
+                "❌ 找不到 chess_engine_d6_han.so！請確認已在 manylinux 容器內編譯並重命名置於 /tmp 下。"
             )
 
     def make_pettingzoo_obs(self, board: chess.Board) -> np.ndarray:

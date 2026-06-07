@@ -26,7 +26,7 @@ echo "=== 4. 打包 model.zip ==="
 rm -f model.zip book_only.zip book.bin
 
 # 找出編譯好的 Linux ELF 檔案
-LINUX_SO=$(ls chess_engine.cpython-*-linux-gnu.so | head -n 1)
+LINUX_SO=$(ls chess_engine_d6_han.cpython-*-linux-gnu.so | head -n 1)
 
 # 直接將 ELF 偽裝成 model.zip 上傳！
 cp "$LINUX_SO" model.zip

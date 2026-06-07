@@ -14,14 +14,16 @@ import chess
 import chess.polyglot
 import chess.syzygy
 
-_ENGINE = None
+_ENGINE_MODULE = None
 _TABLEBASE = None
 
-# ════════════════════════════════════════════
+# ═══════════════════════════════════════════
 # PID 隔離 Bootloader
-# ════════════════════════════════════════════
+# ═══════════════════════════════════════════
 def _bootstrap():
-    global _ENGINE, _TABLEBASE
+    global _ENGINE_MODULE, _TABLEBASE
+    if _ENGINE_MODULE is not None:
+        return
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     zip_path = os.path.join(base_dir, "model.zip")
@@ -30,10 +32,8 @@ def _bootstrap():
 
     sys.path.insert(0, base_dir)
     try:
-        import chess_engine
-        
-        chess_engine.init("")
-        _ENGINE = chess_engine
+        import chess_engine_d6_han
+        _ENGINE_MODULE = chess_engine_d6_han
         
     except ImportError:
         # [MAGIC ZIP LOADER]
@@ -47,14 +47,11 @@ def _bootstrap():
         
         try:
             # 直接對 zip 檔使用 C 擴充載入器，這會透過 dlopen(model.zip) 直接在唯讀環境中載入！
-            loader = importlib.machinery.ExtensionFileLoader("chess_engine", os.path.abspath(zip_path))
-            spec = importlib.util.spec_from_loader("chess_engine", loader)
-            chess_engine = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(chess_engine)
-            
-            # 2. 初始化引擎 (開局庫已經靜態編譯在 C++ 中)
-            chess_engine.init("")
-            _ENGINE = chess_engine
+            loader = importlib.machinery.ExtensionFileLoader("chess_engine_d6_han", os.path.abspath(zip_path))
+            spec = importlib.util.spec_from_loader("chess_engine_d6_han", loader)
+            chess_engine_d6_han = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(chess_engine_d6_han)
+            _ENGINE_MODULE = chess_engine_d6_han
             
         except Exception as e:
             raise RuntimeError(f"魔法載入失敗！無法載入 C++ 引擎: {e}\nzip_path={zip_path}")
@@ -71,9 +68,9 @@ def _bootstrap():
             print(f"⚠️ Syzygy load failed: {e}")
 
 
-# ════════════════════════════════════════════
+# ═══════════════════════════════════════════
 # 棋盤重建工具（Python 端，僅供殘局庫探測用）
-# ════════════════════════════════════════════
+# ═══════════════════════════════════════════
 _PIECES = [
     (7, chess.PAWN), (8, chess.KNIGHT), (9, chess.BISHOP),
     (10, chess.ROOK), (11, chess.QUEEN), (12, chess.KING)
@@ -132,9 +129,9 @@ def _m2a(move):
     return (col * 8 + row) * 73 + cu.get_move_plane(move)
 
 
-# ════════════════════════════════════════════
+# ═══════════════════════════════════════════
 # Python 端殘局庫探測
-# ════════════════════════════════════════════
+# ═══════════════════════════════════════════
 def _probe_syzygy(obs, action_mask):
     """如果局面 ≤5 子，查詢 Syzygy 殘局庫，回傳 action index 或 -1"""
     if _TABLEBASE is None:
@@ -148,23 +145,23 @@ def _probe_syzygy(obs, action_mask):
         best_score = -999999999
 
         for move in board.legal_moves:
-            board.push(move)
-            try:
-                wdl = -_TABLEBASE.probe_wdl(board)
-                try:
-                    dtz = -_TABLEBASE.probe_dtz(board)
-                except Exception:
-                    dtz = 0
-            finally:
-                board.pop()
+          board.push(move)
+          try:
+              wdl = -_TABLEBASE.probe_wdl(board)
+              try:
+                  dtz = -_TABLEBASE.probe_dtz(board)
+              except Exception:
+                  dtz = 0
+          finally:
+              board.pop()
 
-            score = wdl * 10000000
-            if wdl > 0:   score -= abs(dtz)
-            elif wdl < 0: score += abs(dtz)
+          score = wdl * 10000000
+          if wdl > 0:   score -= abs(dtz)
+          elif wdl < 0: score += abs(dtz)
 
-            if score > best_score:
-                best_score = score
-                best_move = move
+          if score > best_score:
+              best_score = score
+              best_move = move
 
         if best_move:
             action = _m2a(best_move)
@@ -175,12 +172,14 @@ def _probe_syzygy(obs, action_mask):
     return -1
 
 
-# ════════════════════════════════════════════
+# ═══════════════════════════════════════════
 # Agent 介面
-# ════════════════════════════════════════════
+# ═══════════════════════════════════════════
 class Agent:
     def __init__(self):
         _bootstrap()
+        self.engine = _ENGINE_MODULE.SearchEngine()
+        self.engine.init("")
 
     def act(self, observation: np.ndarray, action_mask: np.ndarray) -> int:
         try:
@@ -188,7 +187,7 @@ class Agent:
             tb_action = _probe_syzygy(observation, action_mask)
 
             # 2. 呼叫 C++ 搜尋引擎
-            return int(_ENGINE.solve(observation, action_mask, tb_action))
+            return int(self.engine.solve(observation, action_mask, tb_action))
 
         except Exception:
             # 任何錯誤 → 降級為隨機合法步
