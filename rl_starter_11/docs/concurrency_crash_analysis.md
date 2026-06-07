@@ -96,6 +96,36 @@ Current FEN: r2q1rQ1/pppbbpp1/8/3pP3/8/5N2/PP1B1PPP/R3K2R b KQ - 0 6
 
 ---
 
+## 3.4 問題三：框架傳遞空/無效 Observation (導致 Code 134)
+
+### 3.4.1 現象
+- 系統終止，報告 `CRITICAL ERROR: kingSq called but color 0 has no king on the board!` 且棋盤的 piece count 為 0（棋盤完全為空）。
+
+### 3.4.2 原因分析
+在訓練或平台熱身（Warmup）/重設（Reset）階段，天梯框架有時會向 Agent 發送一個全零的 Dummy Observation（或缺少國王的無效 Observation）。
+當我們調用 `Board board(fen)` 構造函數解析此空 observation 重建的 FEN 時，棋子數量為 0。由於 `Board` 構造函數內部在初始化易位路徑時會直接調用 `kingSq` 尋找國王，因此在構造函數內部即會觸發國王缺失斷言並崩潰中止。
+
+### 3.4.3 修復方式
+在 [engine.cpp](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp/engine.cpp) 的 [solve](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp/engine.cpp#L1477) 進入點中，預先掃描 Numpy 陣列中是否包含雙方的國王通道（White King 為 channel 12，Black King 為 channel 18）。如果任一方國王缺失（包括全空 Dummy Observation），則直接安全實例化為預設的起始棋盤 `Board()`，避免構造 FEN 時觸發庫崩潰。
+
+```cpp
+    bool has_white_king = false;
+    bool has_black_king = false;
+    auto obs_unchecked = obs.unchecked<3>();
+    for (int r = 0; r < 8; r++) {
+      for (int c = 0; c < 8; c++) {
+        if (obs_unchecked(r, c, 12)) has_white_king = true;
+        if (obs_unchecked(r, c, 18)) has_black_king = true;
+      }
+    }
+
+    Board board = (has_white_king && has_black_king) 
+                  ? Board(rebuild_fen_from_observation(obs)) 
+                  : Board();
+```
+
+---
+
 ## 4. 驗證與效能整理
 
 ### 4.1 線程安全性與壓力測試
