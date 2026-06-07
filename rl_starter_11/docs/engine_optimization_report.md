@@ -15,6 +15,7 @@
 5. [低優先改善](#5-低優先改善)
 6. [不建議修改的部分](#6-不建議修改的部分)
 7. [優化優先順序總覽](#7-優化優先順序總覽)
+8. [近期比賽失敗原因統計與分析 (2026-06-08 觀測)](#8-近期比賽失敗原因統計與分析-2026-06-08-觀測)
 
 ---
 
@@ -91,6 +92,41 @@ int null_score = -alpha_beta(board, depth - 1 - R, -beta, -beta + 1,
 ```
 
 **有效性評估**：★★★☆☆ — 可以略微加速搜尋，無正確性風險。
+
+---
+
+### 🔴 BUG-4：`quiescence` 中非吃子升變導致 `PIECE_VAL` 陣列越界（引發 Segmentation Fault / code 139）
+
+**位置**：[quiescence，第 1142–1145 行](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp/engine.cpp#L1142-L1145)
+
+```cpp
+    for (const auto &move : captures) {
+      PieceType victim = board.getCapturing<PieceType>(move);
+      int victim_val = PIECE_VAL[static_cast<int>(victim)];
+```
+
+**問題**：在靜態搜尋 `quiescence` 中，生成走法使用 `movegen::legalmoves<movegen::MoveGenType::CAPTURE>`，這會同時生成「吃子走法」和「升變走法（即使該格子沒有棋子被吃）」。
+如果遇到非吃子的升變走法，`board.getCapturing` 會回傳 `PieceType::NONE`（整數值為 `6`）。
+但 `PIECE_VAL` 陣列只有 6 個元素：
+```cpp
+static constexpr int PIECE_VAL[6] = {100, 320, 330, 500, 900, 20000};
+```
+這導致存取 `PIECE_VAL[6]` 發生嚴重的越界讀取，從而在 Docker 容器中引發記憶體段錯誤（Segmentation Fault，退出碼 139）。通常這會在對局進入中後期（兵準備升變）時觸發。
+
+**影響**：極高。會導致進程直接被系統中止（Segfault），對戰直接以失敗結束。
+
+**修正方式**：
+將 `PIECE_VAL` 陣列長度增加至 7 元素（將 `NONE` 的價值設為 0），或者在存取時加上安全判斷：
+```cpp
+static constexpr int PIECE_VAL[7] = {100, 320, 330, 500, 900, 20000, 0};
+```
+或者：
+```cpp
+      PieceType victim = board.getCapturing<PieceType>(move);
+      int victim_val = (victim == PieceType::NONE) ? 0 : PIECE_VAL[static_cast<int>(victim)];
+```
+
+**有效性評估**：★★★★★ — 完全解決 D6 C++ Engine 運行中發生的隨機 Segfault 崩潰問題。
 
 ---
 
@@ -341,15 +377,34 @@ else m_time_limit = 0.2;
 
 | 排名 | 項目 | 類型 | 難度 | 風險 | 預期效益 |
 |:---:|---|---|:---:|:---:|---|
-| **1** | BUG-1：`is_quiet` 判斷時機 | Bug 修正 | 極低 | 極低 | Killer/History/LMR 全面修正 |
-| **2** | OPT-1：Aspiration Windows | 搜尋 | 中 | 低 | 節省 20–40% 節點 |
-| **3** | OPT-2：Futility Pruning | 搜尋 | 低 | 低 | 葉節點剪掉 30–60% quiet |
-| **4** | OPT-3：PVS | 搜尋 | 低 | 低 | 節省 10–20% 節點 |
-| **5** | OPT-5：兵結構評估 | 評估 | 低 | 低 | 改善中盤局面判斷 |
-| **6** | BUG-3：NMP zero-window | Bug | 極低 | 極低 | 微小加速 |
-| **7** | BUG-2：fallback_random 取模 | Bug | 極低 | 極低 | 極少觸發但應修正 |
-| **8** | OPT-8：替換 unordered_map | 效能 | 中 | 中 | 減少搜尋常數開銷 |
-| **9** | OPT-10：走法排序避免 heap alloc | 效能 | 中 | 低 | 減少每節點開銷 |
-| **10** | OPT-6：王安全評估 | 評估 | 高 | 中 | 改善攻防判斷 |
+| **1** | BUG-4：`quiescence` 陣列越界 | Bug 修正 | 極低 | 極低 | 解決 D6 引擎 Segfault 崩潰問題 |
+| **2** | BUG-1：`is_quiet` 判斷時機 | Bug 修正 | 極低 | 極低 | Killer/History/LMR 全面修正 |
+| **3** | OPT-1：Aspiration Windows | 搜尋 | 中 | 低 | 節省 20–40% 節點 |
+| **4** | OPT-2：Futility Pruning | 搜尋 | 低 | 低 | 葉節點剪掉 30–60% quiet |
+| **5** | OPT-3：PVS | 搜尋 | 低 | 低 | 節省 10–20% 節點 |
+| **6** | OPT-5：兵結構評估 | 評估 | 低 | 低 | 改善中盤局面判斷 |
+| **7** | BUG-3：NMP zero-window | Bug | 極低 | 極低 | 微小加速 |
+| **8** | BUG-2：fallback_random 取模 | Bug | 極低 | 極低 | 極少觸發但應修正 |
+| **9** | OPT-8：替換 unordered_map | 效能 | 中 | 中 | 減少搜尋常數開銷 |
+| **10** | OPT-10：走法排序避免 heap alloc | 效能 | 中 | 低 | 減少每節點開銷 |
 
-> **建議**：先修 BUG-1（一行修改），再依序實作 OPT-1 → OPT-2 → OPT-3。這四項改動合起來可以讓引擎在相同時間內多搜 1–3 層深度，是最大的競爭力提升。
+> **建議**：**最優先修正 BUG-4（崩潰問題）**，接著修正 BUG-1，再依序實作 OPT-1 → OPT-2 → OPT-3。修正 BUG-4 可以解決隨機 Segfault 崩潰；其餘搜尋優化合起來可以讓引擎在相同時間內多搜 1–3 層深度，是最大的競爭力提升。
+
+---
+
+## 8. 近期比賽失敗原因統計與分析 (2026-06-08 觀測)
+
+針對競賽 11 近期對戰，我們透過 API 撈取最近的 **200 場比賽**，其中共有 **58 場失敗（failed）**（失敗率約 29%）。統計分類如下：
+
+### 1) 我們的 `D6 Engine` (Slot 2) 發生 Segfault (退出碼 139) — 12 次 (21%)
+*   **原因**：即上述 [BUG-4](#-bug-4quiescence-中非吃子升變導致-piece_val-陣列越界引發-segmentation-fault--code-139)。在局進入中後期且有兵升變可能性時觸發。修正 BUG-4 後可徹底排除。
+
+### 2) 對手機制 Bug：`model.zip.zip` 找不到檔案 — 34 次 (59%)
+*   **原因**：主要是對手 `41375024H (My Chess Agent)` 等。其程式碼在加載模型時重複附加 `.zip` 副檔名（尋找 `model.zip.zip` 檔案），導致其 Docker 容器載入失敗崩潰。此為對方 Bug，但會導致整場比賽 failed，浪費我方匹配 stamina。
+*   **對策**：應在 `matchmaker.py` 發起指定挑戰時，主動過濾並避開這些會導致平台對戰錯誤的對手。
+
+### 3) 平台伺服器在對戰中重啟 — 7 次 (12%)
+*   **原因**：平台系統維護，非程式本身問題。
+
+### 4) 對局超時 (逾 600 秒) — 5 次 (8%)
+*   **原因**：對局時間超過 10 分鐘，可能由於引擎搜尋耗時或雙方陷入死循環。

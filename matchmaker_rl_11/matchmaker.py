@@ -561,6 +561,12 @@ class MLArenaMatchmaker:
                     if battle_active:
                         log(f"Graceful shutdown requested. Waiting for active Battle #{latest_battle.get('id')} to finish...", MAGENTA)
                     else:
+                        # Process the final battle if it just finished and we haven't processed it yet
+                        if latest_battle:
+                            bid = latest_battle.get("id")
+                            if bid > self.last_processed_battle_id:
+                                self.process_battle_result(latest_battle)
+                                self.last_processed_battle_id = bid
                         log("No active battles. Leaving queue and exiting gracefully.", GREEN)
                         self.leave_queue()
                         sys.exit(0)

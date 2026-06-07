@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <stdexcept>
 
 namespace py = pybind11;
 using namespace chess;
@@ -301,7 +302,8 @@ static constexpr size_t TT_MASK = TT_SIZE - 1;
 // ═══════════════════════════════════════════
 // Piece-Square Tables (PST) and Piece Values
 // ═══════════════════════════════════════════
-static constexpr int PIECE_VAL[6] = {100, 320, 330, 500, 900, 20000};
+// Added 7th element (0) to handle PieceType::NONE safely (BUG-4)
+static constexpr int PIECE_VAL[7] = {100, 320, 330, 500, 900, 20000, 0};
 
 static constexpr int16_t PST_PAWN[64] = {
     0,  0,  0,  0,   0,   0,  0,  0,  50, 50, 50,  50, 50, 50,  50, 50,
@@ -738,6 +740,7 @@ inline int move_to_action(Move move) {
   return (col * 8 + row) * 73 + get_move_plane(move);
 }
 
+// BUG-2: Fixed modular bias by replacing bitwise & with modulus
 inline int fallback_random(const py::detail::unchecked_reference<int8_t, 1> &mask) {
   std::vector<int> legals;
   for (int i = 0; i < 4672; i++) {
@@ -746,7 +749,7 @@ inline int fallback_random(const py::detail::unchecked_reference<int8_t, 1> &mas
   }
   if (legals.empty())
     return 0;
-  return legals[rand() & (legals.size() - 1)]; // Fast random
+  return legals[rand() % legals.size()]; // Fast random
 }
 
 inline bool has_major_pieces(const Board &board) {
@@ -768,7 +771,8 @@ private:
   std::vector<TTEntry> m_tt;
   bool m_initialized = false;
   std::string m_book_path;
-  std::unordered_map<uint64_t, int> m_game_history;
+  // OPT-8: Replaced std::unordered_map with std::vector for faster linear stack scans
+  std::vector<uint64_t> m_game_history;
   Color m_my_real_color = Color::WHITE;
   bool m_color_detected = false;
   Board m_prev_board;
@@ -1089,21 +1093,48 @@ public:
     }
 
     // Passed Pawns
+    uint64_t pawns_w_bits_v = board.pieces(PieceType::PAWN, Color::WHITE).getBits();
+    uint64_t pawns_b_bits_v = board.pieces(PieceType::PAWN, Color::BLACK).getBits();
+
     Bitboard pawns_w = board.pieces(PieceType::PAWN, Color::WHITE);
-    uint64_t pawns_b = board.pieces(PieceType::PAWN, Color::BLACK).getBits();
     while (pawns_w) {
       Square sq = pawns_w.pop();
-      if (!(pawns_b & m_passed_pawn_masks[0][sq.index()])) {
+      if (!(pawns_b_bits_v & m_passed_pawn_masks[0][sq.index()])) {
         score += 10 * (sq.index() / 8);
       }
     }
 
     Bitboard pawns_b_bb = board.pieces(PieceType::PAWN, Color::BLACK);
-    uint64_t pawns_w_bits = board.pieces(PieceType::PAWN, Color::WHITE).getBits();
     while (pawns_b_bb) {
       Square sq = pawns_b_bb.pop();
-      if (!(pawns_w_bits & m_passed_pawn_masks[1][sq.index()])) {
+      if (!(pawns_w_bits_v & m_passed_pawn_masks[1][sq.index()])) {
         score -= 10 * (7 - (sq.index() / 8));
+      }
+    }
+
+    // OPT-5: Pawn Structure evaluation (Doubled and Isolated pawns)
+    for (int f = 0; f < 8; f++) {
+      uint64_t file_mask = 0x0101010101010101ULL << f;
+      uint64_t adj_mask = 0;
+      if (f > 0) adj_mask |= (0x0101010101010101ULL << (f - 1));
+      if (f < 7) adj_mask |= (0x0101010101010101ULL << (f + 1));
+
+      // Doubled pawns
+      int count_w = (pawns_w_bits_v & file_mask) ? Bitboard(pawns_w_bits_v & file_mask).count() : 0;
+      if (count_w > 1) {
+        score -= 10 * (count_w - 1);
+      }
+      int count_b = (pawns_b_bits_v & file_mask) ? Bitboard(pawns_b_bits_v & file_mask).count() : 0;
+      if (count_b > 1) {
+        score += 10 * (count_b - 1);
+      }
+
+      // Isolated pawns
+      if ((pawns_w_bits_v & file_mask) && !(pawns_w_bits_v & adj_mask)) {
+        score -= 15;
+      }
+      if ((pawns_b_bits_v & file_mask) && !(pawns_b_bits_v & adj_mask)) {
+        score += 15;
       }
     }
 
@@ -1176,7 +1207,7 @@ public:
   }
 
   int alpha_beta(Board &board, int depth, int alpha, int beta, int extensions,
-                 std::unordered_map<uint64_t, int> &search_history) {
+                 std::vector<uint64_t> &search_history) {
     m_node_count++;
     if ((m_node_count & 4095) == 0) {
       auto now = std::chrono::steady_clock::now();
@@ -1188,9 +1219,15 @@ public:
 
     uint64_t key = board.hash();
 
-    // Repetition check
-    if (search_history.count(key) && search_history[key] >= 2) {
-      return 0;
+    // OPT-8: Repetition check using std::vector linear scan
+    int rep_count = 0;
+    for (auto h : search_history) {
+      if (h == key) {
+        rep_count++;
+        if (rep_count >= 2) {
+          return 0;
+        }
+      }
     }
 
     // TT probe
@@ -1223,13 +1260,15 @@ public:
       }
     }
 
+    int static_eval = evaluate(board, 0);
+
     int original_alpha = alpha;
 
-    // Null Move Pruning (NMP)
+    // BUG-3: Null Move Pruning (NMP) zero-window search
     int R = (depth >= 6) ? 3 : 2;
     if (depth >= R + 1 && !in_check && has_major_pieces(board)) {
       board.makeNullMove();
-      int null_score = -alpha_beta(board, depth - 1 - R, -beta, -alpha,
+      int null_score = -alpha_beta(board, depth - 1 - R, -beta, -beta + 1,
                                    extensions, search_history);
       board.unmakeNullMove();
       if (null_score >= beta)
@@ -1240,16 +1279,28 @@ public:
     movegen::legalmoves(moves, board);
     order_moves(moves, board, tt_move, depth);
 
-    search_history[key]++;
+    search_history.push_back(key);
 
     Move best_move = Move::NO_MOVE;
     int best_score = -9999999;
 
+    // OPT-2: Futility Pruning quiet moves flag
+    bool skip_quiet = (depth == 1 && !in_check && static_eval + 150 < alpha);
+
     for (int i = 0; i < (int)moves.size(); i++) {
       const auto &move = moves[i];
+      
+      // BUG-1: Query board.isCapture before making the move
+      bool is_capture = board.isCapture(move);
+      bool is_quiet = !is_capture && move.typeOf() != Move::PROMOTION;
+
+      // OPT-2: Futility Pruning quiet moves skip
+      if (skip_quiet && is_quiet) {
+        continue;
+      }
+
       board.makeMove(move);
 
-      bool is_quiet = !board.isCapture(move) && move.typeOf() != Move::PROMOTION;
       bool gives_check = board.inCheck();
 
       int ext = (gives_check && extensions < 3) ? 1 : 0;
@@ -1258,7 +1309,7 @@ public:
 
       int score;
 
-      // Late Move Reductions (LMR)
+      // OPT-3: Principal Variation Search (PVS) with LMR
       if (new_depth >= 3 && i >= 3 && is_quiet && !gives_check && !in_check) {
         int reduction = 1 + int(log(new_depth) * log(i + 1) / 2.0);
         reduction = std::min(reduction, new_depth - 1);
@@ -1268,9 +1319,16 @@ public:
           score = -alpha_beta(board, new_depth, -beta, -alpha, new_ext,
                               search_history);
         }
+      } else if (i > 0) {
+        // Zero-window search for non-PV moves
+        score = -alpha_beta(board, new_depth, -(alpha + 1), -alpha, new_ext, search_history);
+        if (score > alpha && score < beta) {
+          // Research with full window
+          score = -alpha_beta(board, new_depth, -beta, -alpha, new_ext, search_history);
+        }
       } else {
-        score =
-            -alpha_beta(board, new_depth, -beta, -alpha, new_ext, search_history);
+        // PV move gets full window
+        score = -alpha_beta(board, new_depth, -beta, -alpha, new_ext, search_history);
       }
 
       board.unmakeMove(move);
@@ -1297,9 +1355,7 @@ public:
       }
     }
 
-    search_history[key]--;
-    if (search_history[key] == 0)
-      search_history.erase(key);
+    search_history.pop_back();
 
     // TT Store
     TTFlag flag = TT_EXACT;
@@ -1313,7 +1369,7 @@ public:
   }
 
   Move search_best_move(Board &board, int max_depth,
-                        std::unordered_map<uint64_t, int> &search_history) {
+                        std::vector<uint64_t> &search_history) {
     m_search_start = std::chrono::steady_clock::now();
     m_node_count = 0;
 
@@ -1345,36 +1401,64 @@ public:
       m_time_limit = 0.2;
 
     Move best_move = Move::NO_MOVE;
+    int last_score = -9999999;
 
     try {
       for (int depth = 1; depth <= max_depth; depth++) {
-        Move current_best = Move::NO_MOVE;
-        int current_score = -9999999;
+        // OPT-1: Aspiration Windows search logic
+        int alpha = -9999999;
+        int beta = 9999999;
+        int delta = 50;
 
-        Movelist moves;
-        movegen::legalmoves(moves, board);
-        order_moves(moves, board, best_move, 0);
-
-        for (const auto &move : moves) {
-          auto now = std::chrono::steady_clock::now();
-          double elapsed =
-              std::chrono::duration<double>(now - m_search_start).count();
-          if (elapsed > m_time_limit)
-            throw std::runtime_error("timeout");
-
-          board.makeMove(move);
-          int score =
-              -alpha_beta(board, depth - 1, -9999999, 9999999, 0, search_history);
-          board.unmakeMove(move);
-
-          if (score > current_score) {
-            current_score = score;
-            current_best = move;
-          }
+        if (depth >= 3 && last_score != -9999999) {
+          alpha = last_score - delta;
+          beta = last_score + delta;
         }
 
-        if (current_best != Move::NO_MOVE) {
-          best_move = current_best;
+        while (true) {
+          Move current_best = Move::NO_MOVE;
+          int current_score = -9999999;
+
+          Movelist moves;
+          movegen::legalmoves(moves, board);
+          order_moves(moves, board, best_move, 0);
+
+          for (const auto &move : moves) {
+            auto now = std::chrono::steady_clock::now();
+            double elapsed =
+                std::chrono::duration<double>(now - m_search_start).count();
+            if (elapsed > m_time_limit)
+              throw std::runtime_error("timeout");
+
+            board.makeMove(move);
+            int score =
+                -alpha_beta(board, depth - 1, -beta, -alpha, 0, search_history);
+            board.unmakeMove(move);
+
+            if (score > current_score) {
+              current_score = score;
+              current_best = move;
+            }
+          }
+
+          if (current_score <= alpha) {
+            alpha = -9999999;
+            delta *= 2;
+          } else if (current_score >= beta) {
+            beta = 9999999;
+            delta *= 2;
+          } else {
+            last_score = current_score;
+            if (current_best != Move::NO_MOVE) {
+              best_move = current_best;
+            }
+            break;
+          }
+
+          if (delta > 2000) {
+            alpha = -9999999;
+            beta = 9999999;
+          }
         }
       }
     } catch (const std::runtime_error &) {
@@ -1392,54 +1476,48 @@ public:
   }
 
   int solve(py::array_t<int8_t> obs, py::array_t<int8_t> mask, int tb_action) {
-    try {
-      std::string fen = rebuild_fen_from_observation(obs);
-      Board board(fen);
-      auto mask_r = mask.unchecked<1>();
+    std::string fen = rebuild_fen_from_observation(obs);
+    Board board(fen);
+    auto mask_r = mask.unchecked<1>();
 
-      detect_new_game_and_color(board);
+    detect_new_game_and_color(board);
 
-      // 1. Syzygy Tablebase probe (from Python)
-      if (tb_action >= 0 && tb_action < 4672 && mask_r(tb_action) == 1) {
-        return tb_action;
-      }
-
-      uint64_t cur_hash = board.hash();
-      m_game_history[cur_hash]++;
-
-      // 2. Opening Book lookup
-      bool is_black = (m_my_real_color == Color::BLACK);
-      Move book_move = probe_book(board, is_black);
-      if (book_move != Move::NO_MOVE) {
-        int action = move_to_action(book_move);
-        if (action >= 0 && action < 4672 && mask_r(action) == 1) {
-          board.makeMove(book_move);
-          m_game_history[board.hash()]++;
-          board.unmakeMove(book_move);
-          return action;
-        }
-      }
-
-      // 3. Alpha-Beta NegaMax Search
-      auto search_history = m_game_history;
-      Move best = search_best_move(board, 64, search_history);
-
-      if (best != Move::NO_MOVE) {
-        int action = move_to_action(best);
-        if (action >= 0 && action < 4672 && mask_r(action) == 1) {
-          board.makeMove(best);
-          m_game_history[board.hash()]++;
-          board.unmakeMove(best);
-          return action;
-        }
-      }
-
-      return fallback_random(mask_r);
-
-    } catch (...) {
-      auto mask_r = mask.unchecked<1>();
-      return fallback_random(mask_r);
+    // 1. Syzygy Tablebase probe (from Python)
+    if (tb_action >= 0 && tb_action < 4672 && mask_r(tb_action) == 1) {
+      return tb_action;
     }
+
+    uint64_t cur_hash = board.hash();
+    m_game_history.push_back(cur_hash);
+
+    // 2. Opening Book lookup
+    bool is_black = (m_my_real_color == Color::BLACK);
+    Move book_move = probe_book(board, is_black);
+    if (book_move != Move::NO_MOVE) {
+      int action = move_to_action(book_move);
+      if (action >= 0 && action < 4672 && mask_r(action) == 1) {
+        board.makeMove(book_move);
+        m_game_history.push_back(board.hash());
+        board.unmakeMove(book_move);
+        return action;
+      }
+    }
+
+    // 3. Alpha-Beta NegaMax Search
+    auto search_history = m_game_history;
+    Move best = search_best_move(board, 64, search_history);
+
+    if (best != Move::NO_MOVE) {
+      int action = move_to_action(best);
+      if (action >= 0 && action < 4672 && mask_r(action) == 1) {
+        board.makeMove(best);
+        m_game_history.push_back(board.hash());
+        board.unmakeMove(best);
+        return action;
+      }
+    }
+
+    throw std::runtime_error("No valid move found from Opening Book or Search Engine!");
   }
 };
 
