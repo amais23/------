@@ -12,6 +12,8 @@ import time
 import re
 import urllib.request
 import urllib.parse
+import random
+import math
 from datetime import datetime
 
 API_BASE = "https://api-mlarena.spkuan.cc/api"
@@ -41,13 +43,16 @@ def log(message, color=RESET, write_file=True):
     if write_file:
         try:
             clean_msg = ANSI_ESCAPE.sub('', formatted_message)
-            with open("matchmaker.log", "a", encoding="utf-8") as f:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            log_path = os.path.join(script_dir, "matchmaker.log")
+            with open(log_path, "a", encoding="utf-8") as f:
                 f.write(clean_msg + "\n")
         except Exception:
             pass
 
 def log_match_csv(battle_id, opponent, opponent_elo, result, elo_before, elo_after, elo_change):
-    csv_file = "match_history.csv"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_file = os.path.join(script_dir, "match_history.csv")
     file_exists = os.path.exists(csv_file)
     try:
         with open(csv_file, "a", encoding="utf-8") as f:
@@ -60,7 +65,7 @@ def log_match_csv(battle_id, opponent, opponent_elo, result, elo_before, elo_aft
         log(f"Failed to write to CSV log: {e}", RED, write_file=False)
 
 class MLArenaMatchmaker:
-    def __init__(self, slot_index=1):
+    def __init__(self, slot_index=2):
         self.api_key = None
         self.student_id = None
         self.slot_id = None
@@ -80,11 +85,13 @@ class MLArenaMatchmaker:
         self.stamina_cooldown_until = 0.0
         
         # Add new state variables
-        self.mode = "queue"
-        self.lost_opponents = set()
+        self.mode = "challenge"
+        self.avoid_opponents = set()
+        self.processed_battle_ids = set()
         self.loss_count = 0
         self.failed_challenges = {}
-        self.state_file = "matchmaker_state.json"
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.state_file = os.path.join(script_dir, "matchmaker_state.json")
         self.exit_requested = False
         
         self.load_credentials()
@@ -123,9 +130,15 @@ class MLArenaMatchmaker:
                 with open(self.state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.loss_count = data.get("loss_count", 0)
-                    self.lost_opponents = set(data.get("lost_opponents", []))
-                    self.mode = data.get("mode", "queue")
-                    log(f"Loaded persistent state from {self.state_file}: loss_count={self.loss_count}, lost_opponents={self.lost_opponents}, mode={self.mode}", GREEN)
+                    
+                    # Migrate old state
+                    lost_opps = data.get("lost_opponents", [])
+                    avoid_opps = data.get("avoid_opponents", [])
+                    self.avoid_opponents = set(avoid_opps) | set(lost_opps)
+                    
+                    self.processed_battle_ids = set(data.get("processed_battle_ids", []))
+                    self.mode = data.get("mode", "challenge")
+                    log(f"Loaded persistent state from {self.state_file}: loss_count={self.loss_count}, avoid_opponents={self.avoid_opponents}, processed_battle_ids={len(self.processed_battle_ids)} ids, mode={self.mode}", GREEN)
             except Exception as e:
                 log(f"Error loading state from {self.state_file}: {e}", RED)
 
@@ -134,7 +147,8 @@ class MLArenaMatchmaker:
             with open(self.state_file, "w", encoding="utf-8") as f:
                 json.dump({
                     "loss_count": self.loss_count,
-                    "lost_opponents": list(self.lost_opponents),
+                    "avoid_opponents": list(self.avoid_opponents),
+                    "processed_battle_ids": list(self.processed_battle_ids),
                     "mode": self.mode
                 }, f, indent=2, ensure_ascii=False)
             log(f"Saved persistent state to {self.state_file}", GREEN)
@@ -151,7 +165,7 @@ class MLArenaMatchmaker:
         return ts >= "2026-06-07T16:00:00"
 
     def initialize_history(self):
-        log("Initializing history and tracking lost opponents since June 8...", CYAN)
+        log("Initializing history and tracking avoided opponents since June 8...", CYAN)
         self.load_state()
         
         # Scan history from API if we do not have a state file
@@ -169,11 +183,14 @@ class MLArenaMatchmaker:
             battles.sort(key=lambda x: x.get("id", 0))
             
             for b in battles:
-                if b.get("status") != "completed":
-                    continue
+                status = b.get("status")
                 created_at = b.get("created_at")
                 if not self.is_after_june_8(created_at):
                     continue
+                    
+                bid = b.get("id")
+                if bid:
+                    self.processed_battle_ids.add(bid)
                     
                 participants = b.get("participants", [])
                 me = None
@@ -184,73 +201,79 @@ class MLArenaMatchmaker:
                     else:
                         opponent = p
                         
-                if me and opponent:
-                    elo_delta = me.get("elo_delta")
-                    rank = me.get("final_rank")
-                    opp_username = opponent.get("username")
-                    opp_user_id = opponent.get("user_id")
+                if opponent:
+                    opp_username = str(opponent.get("username")) if opponent.get("username") is not None else None
+                    opp_user_id = str(opponent.get("user_id")) if opponent.get("user_id") is not None else None
                     
-                    is_loss = False
-                    if elo_delta is not None and elo_delta < 0:
-                        is_loss = True
-                    elif rank == 2 or str(rank) == "2":
-                        is_loss = True
-                    elif rank is not None and opponent.get("final_rank") is not None and rank > opponent.get("final_rank"):
-                        is_loss = True
+                    if status == "failed":
+                        # Failed battles are usually due to server timeout, not the opponent.
+                        # We no longer penalize opponents for failed battles.
+                        pass
+                    elif status == "completed" and me:
+                        elo_delta = me.get("elo_delta")
+                        rank = me.get("final_rank")
+                        opp_rank = opponent.get("final_rank")
                         
-                    if is_loss:
-                        if opp_username:
-                            self.lost_opponents.add(opp_username)
-                        if opp_user_id:
-                            self.lost_opponents.add(opp_user_id)
-                        self.loss_count += 1
+                        is_loss_or_elo_dropping_draw = False
+                        if elo_delta is not None and elo_delta < 0:
+                            is_loss_or_elo_dropping_draw = True
+                        elif rank == 2 or str(rank) == "2":
+                            is_loss_or_elo_dropping_draw = True
+                        elif rank is not None and opp_rank is not None and rank > opp_rank:
+                            is_loss_or_elo_dropping_draw = True
+                            
+                        if is_loss_or_elo_dropping_draw:
+                            if opp_username:
+                                self.avoid_opponents.add(opp_username)
+                            if opp_user_id:
+                                self.avoid_opponents.add(opp_user_id)
+                            self.loss_count += 1
             
             self.save_state()
         else:
-            log(f"Using loaded state. Loss count: {self.loss_count}/2", GREEN)
+            log(f"Using loaded state. Avoided opponents: {len(self.avoid_opponents)}", GREEN)
 
     def determine_initial_mode(self):
-        log("Determining initial mode from latest battle since June 8...", CYAN)
-        if os.path.exists(self.state_file):
-            log(f"Mode loaded from state file: {self.mode}", GREEN)
-            return
+        log("Forcing initial mode to 'challenge' as requested.", GREEN)
+        self.mode = "challenge"
+        self.save_state()
 
-        battles = self.get_recent_battles()
-        my_battles = []
-        for b in battles:
-            if b.get("status") != "completed":
-                continue
-            created_at = b.get("created_at")
-            if not self.is_after_june_8(created_at):
-                continue
-            participants = b.get("participants", [])
-            for p in participants:
-                if p.get("rl_slot_id") == self.slot_id:
-                    my_battles.append(b)
-                    break
-        if not my_battles:
-            log("No previous completed battles found since June 8. Defaulting to 'queue' mode.", GREEN)
-            self.mode = "queue"
+    def process_finished_battles(self):
+        recent_battles = self.get_recent_battles()
+        if not isinstance(recent_battles, list):
             return
             
-        my_battles.sort(key=lambda x: x.get("id", 0), reverse=True)
-        latest = my_battles[0]
+        recent_battles.sort(key=lambda x: x.get("id", 0))
         
-        me = None
-        for p in latest.get("participants", []):
-            if p.get("rl_slot_id") == self.slot_id:
-                me = p
-                break
-        if me:
-            elo_delta = me.get("elo_delta")
-            if elo_delta is not None and elo_delta > 0:
-                log(f"Latest battle #{latest.get('id')} was a WIN. Setting initial mode to 'queue'.", GREEN)
-                self.mode = "queue"
-            else:
-                log(f"Latest battle #{latest.get('id')} was a DRAW/LOSS. Setting initial mode to 'challenge'.", YELLOW)
-                self.mode = "challenge"
-        else:
-            self.mode = "queue"
+        for b in recent_battles:
+            bid = b.get("id")
+            if not bid:
+                continue
+                
+            if bid in self.processed_battle_ids:
+                continue
+                
+            participants = b.get("participants", [])
+            is_me_participant = False
+            for p in participants:
+                if p.get("rl_slot_id") == self.slot_id:
+                    is_me_participant = True
+                    break
+                    
+            if not is_me_participant:
+                continue
+                
+            status = b.get("status")
+            if status in ["pending", "running"]:
+                continue
+                
+            self.process_battle_result(b)
+            self.processed_battle_ids.add(bid)
+            
+        if len(self.processed_battle_ids) > 1000:
+            sorted_ids = sorted(list(self.processed_battle_ids))
+            self.processed_battle_ids = set(sorted_ids[-500:])
+            
         self.save_state()
 
     def get_my_latest_battle(self):
@@ -263,7 +286,7 @@ class MLArenaMatchmaker:
         return None
 
     def find_best_opponent(self):
-        log("Fetching leaderboard to find the best opponent...", CYAN)
+        log("Fetching leaderboard to find a weighted random opponent...", CYAN)
         leaderboard = self.api_request(f"/rl/competitions/{COMPETITION_ID}/leaderboard")
         if not isinstance(leaderboard, list):
             log("Failed to retrieve leaderboard.", RED)
@@ -271,21 +294,25 @@ class MLArenaMatchmaker:
             
         valid_opponents = []
         for item in leaderboard:
-            user_id = item.get("user_id")
-            username = item.get("username")
+            user_id = str(item.get("user_id")) if item.get("user_id") is not None else None
+            username = str(item.get("username")) if item.get("username") is not None else None
             slot_id = item.get("slot_id")
             slot_name = item.get("slot_name")
             elo = item.get("elo_rating", 1000.0)
             
-            if slot_id == self.slot_id or user_id == self.student_id or username == self.student_id:
+            # Exclude self
+            if slot_id == self.slot_id or user_id == str(self.student_id) or username == str(self.student_id):
                 continue
                 
+            # Filter only those who have agents
             if not slot_id or slot_id == 0 or slot_name == "—" or not slot_name:
                 continue
                 
-            if username in self.lost_opponents or user_id in self.lost_opponents:
+            # Exclude avoided opponents
+            if username in self.avoid_opponents or user_id in self.avoid_opponents:
                 continue
                 
+            # Exclude temporarily failed challenge API targets
             if self.failed_challenges.get(user_id, 0) >= 3:
                 continue
                 
@@ -300,24 +327,29 @@ class MLArenaMatchmaker:
             log("No valid opponents found to challenge!", RED)
             return None
             
-        valid_opponents.sort(key=lambda x: x["elo"], reverse=True)
-        best = valid_opponents[0]
-        log(f"Best opponent found: {best['username']} (Elo: {best['elo']:.1f}, Slot: {best['slot_name']})", GREEN)
-        return best
+        # Select randomly based on ELO weighting: w = 10^(E/400)
+        weights = [10 ** (opp["elo"] / 400.0) for opp in valid_opponents]
+        chosen = random.choices(valid_opponents, weights=weights, k=1)[0]
+        log(f"Selected opponent: {chosen['username']} (Elo: {chosen['elo']:.1f}, Slot: {chosen['slot_name']}) out of {len(valid_opponents)} candidates.", GREEN)
+        return chosen
 
-    def challenge_player(self, opponent_user_id):
-        log(f"Challenging player (User ID: {opponent_user_id})...", YELLOW)
+    def challenge_player(self, opponent):
+        opponent_user_id = opponent["user_id"]
+        log(f"Challenging player {opponent.get('username')} (User ID: {opponent_user_id})...", YELLOW)
         body = {
             "competition_id": COMPETITION_ID,
             "attacker_slot_id": self.slot_id,
             "target_user_ids": [opponent_user_id]
         }
+        
+        # Save current challenged opponent info for failed battle fallback
+        self.current_challenged_opponent = opponent
+        
         res = self.api_request("/rl/battles/challenge", method="POST", body=body)
         if res and isinstance(res, dict) and "id" in res:
             log(f"Successfully initiated challenge! Battle ID: {res['id']}", GREEN)
             self.failed_challenges[opponent_user_id] = 0
-            # Track it
-            self.tracked_battles[res["id"]] = {"status": "running"}
+            self.tracked_battles[res["id"]] = {"status": "running", "opponent": opponent}
             return res
         else:
             log(f"Failed to initiate challenge. Response: {res}", RED)
@@ -398,12 +430,57 @@ class MLArenaMatchmaker:
                     break
 
     def get_recent_battles(self):
-        res = self.api_request(f"/rl/competitions/{COMPETITION_ID}/battles?page=1&limit=10")
+        res = self.api_request(f"/rl/competitions/{COMPETITION_ID}/battles?page=1&limit=100")
         if isinstance(res, list):
             return res
         elif isinstance(res, dict) and "items" in res:
             return res["items"]
         return []
+
+    def fetch_battle_replay(self, battle_id):
+        """
+        Fetch the full game transcript (replay) for a given battle via the API.
+        Returns a dict with keys:
+          - 'games'  (int): total number of episodes played
+          - 'wins'   (list[int]): win counts per player index
+          - 'draws'  (int): number of drawn episodes
+          - 'steps'  (list[dict]): each step has 'game', 'step', 'player', 'action'
+        Returns None on failure.
+        """
+        log(f"Fetching replay for battle #{battle_id}...", CYAN)
+        res = self.api_request(f"/rl/battles/{battle_id}/replay")
+        if res and isinstance(res, dict) and "steps" in res:
+            log(f"Replay fetched: {res.get('games')} games, "
+                f"wins={res.get('wins')}, draws={res.get('draws')}, "
+                f"total steps={len(res.get('steps', []))}", GREEN)
+            return res
+        else:
+            log(f"Failed to fetch replay for battle #{battle_id}. Response: {res}", RED)
+            return None
+
+    def log_battle_replay(self, battle_id):
+        """
+        Fetch and print a human-readable summary of each episode in a battle.
+        Useful for debugging server draw bugs (see server_drow_bug.md).
+        """
+        replay = self.fetch_battle_replay(battle_id)
+        if not replay:
+            return
+        steps = replay.get("steps", [])
+        games = replay.get("games", 0)
+        wins = replay.get("wins", [])
+        draws = replay.get("draws", 0)
+        log(f"=== Replay Summary for Battle #{battle_id} ===", CYAN + BOLD)
+        log(f"  Episodes: {games} | Wins by player: {wins} | Draws: {draws}", CYAN)
+        # Group steps by game
+        from collections import defaultdict
+        by_game = defaultdict(list)
+        for s in steps:
+            by_game[s["game"]].append(s)
+        for g in sorted(by_game.keys()):
+            ep_steps = by_game[g]
+            log(f"  Episode {g}: {len(ep_steps)} steps", CYAN)
+        log(f"=== End of Replay Summary ===", CYAN + BOLD)
 
     def check_queue_status(self):
         return self.api_request(f"/rl/competitions/{COMPETITION_ID}/queue/status")
@@ -437,9 +514,39 @@ class MLArenaMatchmaker:
         status = battle.get("status")
         log(f"Processing result for Battle #{bid} (Status: {status})", GREEN + BOLD)
         
+        # Add to processed set
+        self.processed_battle_ids.add(bid)
+        
         if status == "failed":
-            log(f"Battle #{bid} failed. Error message: {battle.get('error_message')}", RED)
-            self.mode = "queue"
+            log(f"Battle #{bid} failed (likely server timeout). Error message: {battle.get('error_message')}", RED)
+            # Failed battles are usually due to server timeout—both sides push compute to the limit.
+            # We do NOT penalize the opponent for a server-side failure.
+            
+            # Find opponent name and user ID (for CSV logging only)
+            opp_name = "Unknown"
+            opp_user_id = None
+            opp_elo = 0.0
+            
+            participants = battle.get("participants", [])
+            opp_part = None
+            for p in participants:
+                if p.get("rl_slot_id") != self.slot_id:
+                    opp_part = p
+                    break
+            
+            if opp_part:
+                opp_name = opp_part.get("username") or f"Guest (Slot ID {opp_part.get('rl_slot_id')})"
+                opp_user_id = opp_part.get("user_id")
+                opp_elo = opp_part.get("elo_before") or 0.0
+            elif hasattr(self, 'current_challenged_opponent') and self.current_challenged_opponent:
+                opp_name = self.current_challenged_opponent.get("username", "Unknown")
+                opp_user_id = self.current_challenged_opponent.get("user_id")
+                opp_elo = self.current_challenged_opponent.get("elo", 0.0)
+                
+            opp_name_str = str(opp_name) if opp_name is not None else "Unknown"
+                    
+            log_match_csv(bid, opp_name_str, float(opp_elo), "FAIL", float(self.current_elo), float(self.current_elo), 0.0)
+            self.mode = "challenge"
             self.save_state()
             return
             
@@ -475,6 +582,9 @@ class MLArenaMatchmaker:
         if opp_name is None:
             opp_name = f"Guest (Slot ID {opponent.get('rl_slot_id')})" if opponent else "Unknown"
             
+        opp_name_str = str(opp_name) if opp_name is not None else "Unknown"
+        opp_user_id_str = str(opp_user_id) if opp_user_id is not None else None
+            
         won = elo_delta > 0
         is_loss = False
         if elo_delta < 0:
@@ -488,28 +598,38 @@ class MLArenaMatchmaker:
             self.session_wins += 1
             result_str = f"{GREEN}WIN 🏆{RESET}"
             csv_result = "WIN"
-            self.mode = "queue"
+            self.mode = "challenge"
         elif is_loss:
             self.session_losses += 1
             self.loss_count += 1
             result_str = f"{RED}LOSS ❌{RESET}"
             csv_result = "LOSS"
             self.mode = "challenge"
-            if opponent and opponent.get("username"):
-                self.lost_opponents.add(opponent.get("username"))
-            if opp_user_id:
-                self.lost_opponents.add(opp_user_id)
         else:
             self.session_draws += 1
             result_str = f"{YELLOW}DRAW 🤝{RESET}"
             csv_result = "DRAW"
             self.mode = "challenge"
+
+        # ELO decrease or loss avoidance rule:
+        should_avoid = False
+        if is_loss:
+            should_avoid = True
+        elif elo_delta is not None and elo_delta < 0:
+            should_avoid = True
+
+        if should_avoid:
+            if opp_name_str and opp_name_str != "Unknown":
+                self.avoid_opponents.add(opp_name_str)
+            if opp_user_id_str:
+                self.avoid_opponents.add(opp_user_id_str)
+            log(f"Added opponent {opp_name_str} ({opp_user_id_str}) to avoid list (due to loss or ELO-reducing draw).", YELLOW)
             
-        log(f"Battle #{bid} Completed! Result: {result_str} vs {opp_name} (Elo: {opp_elo:.1f})", GREEN + BOLD)
+        log(f"Battle #{bid} Completed! Result: {result_str} vs {opp_name_str} (Elo: {opp_elo:.1f})", GREEN + BOLD)
         log(f"  Elo Change: {elo_before:.1f} -> {elo_after:.1f} ({elo_change:+.2f})", CYAN)
         
         # Write to CSV log
-        log_match_csv(bid, opp_name, opp_elo, csv_result, elo_before, elo_after, elo_change)
+        log_match_csv(bid, opp_name_str, opp_elo, csv_result, elo_before, elo_after, elo_change)
         
         # Save updated state
         self.save_state()
@@ -518,26 +638,23 @@ class MLArenaMatchmaker:
         win_rate = (self.session_wins / total_games * 100) if total_games > 0 else 0
         log(f"Session Stats: {self.session_wins}W - {self.session_losses}L - {self.session_draws}D (Win Rate: {win_rate:.1f}%) | Total Elo Delta: {self.current_elo - self.initial_elo:+.2f}", MAGENTA + BOLD)
         log(f"Leaderboard: Current Elo: {self.current_elo:.1f} | Total Games: {self.current_games}", CYAN)
-        log(f"Session Loss Count: {self.loss_count}/2 | Lost Opponents: {self.lost_opponents}", CYAN)
-        
-        if self.loss_count >= 2:
-            log(f"{self.slot_name} has accumulated {self.loss_count} losses! Leaving queue and stopping matchmaker immediately.", RED + BOLD)
-            self.leave_queue()
-            sys.exit(0)
+        log(f"Session Loss Count: {self.loss_count} | Avoided Opponents Count: {len(self.avoid_opponents)}", CYAN)
 
     def start(self):
         self.resolve_slot()
         
+        # Ensure we are not in the queue
+        self.leave_queue()
+        
         # Load state and initialize history from June 8 onwards
         self.initialize_history()
         
-        # Check initial battle status to set last_processed_battle_id
+        # Check initial battle status to set last_processed_battle_id and populate processed_battle_ids
         latest_battle = self.get_my_latest_battle()
         if latest_battle:
             bid = latest_battle.get("id")
             status = latest_battle.get("status")
             if status in ["pending", "running"]:
-                # If active, we want to process it when it completes
                 self.last_processed_battle_id = bid - 1
                 log(f"Latest battle #{bid} is currently {status}. Will process when finished.", CYAN)
             else:
@@ -548,27 +665,33 @@ class MLArenaMatchmaker:
             self.last_processed_battle_id = 0
             self.determine_initial_mode()
             
-        log("Matchmaker loop started. Press Ctrl+C to cancel and leave queue.", CYAN + BOLD)
-        consecutive_errors = 0
+        log("Matchmaker loop started. Press Ctrl+C to cancel.", CYAN + BOLD)
         
         while True:
             try:
                 # If the user requested to exit, check if we can stop
                 if self.exit_requested:
-                    # Check if there is an active battle
-                    latest_battle = self.get_my_latest_battle()
-                    battle_active = latest_battle is not None and latest_battle.get("status") in ["pending", "running"]
-                    if battle_active:
-                        log(f"Graceful shutdown requested. Waiting for active Battle #{latest_battle.get('id')} to finish...", MAGENTA)
+                    recent_battles = self.get_recent_battles()
+                    any_active = False
+                    if isinstance(recent_battles, list):
+                        for b in recent_battles:
+                            bid = b.get("id")
+                            if bid not in self.processed_battle_ids:
+                                participants = b.get("participants", [])
+                                for p in participants:
+                                    if p.get("rl_slot_id") == self.slot_id:
+                                        if b.get("status") in ["pending", "running"]:
+                                            any_active = True
+                                            break
+                                            
+                    if any_active:
+                        log("Graceful shutdown requested. Waiting for active battles to finish...", MAGENTA)
+                        self.process_finished_battles()
+                        time.sleep(10)
+                        continue
                     else:
-                        # Process the final battle if it just finished and we haven't processed it yet
-                        if latest_battle:
-                            bid = latest_battle.get("id")
-                            if bid > self.last_processed_battle_id:
-                                self.process_battle_result(latest_battle)
-                                self.last_processed_battle_id = bid
-                        log("No active battles. Leaving queue and exiting gracefully.", GREEN)
-                        self.leave_queue()
+                        self.process_finished_battles()
+                        log("No active battles. Exiting gracefully.", GREEN)
                         sys.exit(0)
 
                 # 0. Check stamina cooldown
@@ -576,59 +699,22 @@ class MLArenaMatchmaker:
                 if current_time < self.stamina_cooldown_until:
                     remaining = int(self.stamina_cooldown_until - current_time)
                     log(f"Out of stamina. Waiting for regeneration... ({remaining}s remaining)", YELLOW)
+                    self.process_finished_battles()
                     time.sleep(10)
                     continue
 
-                # 1. Fetch current status
-                status = self.check_queue_status()
-                if status is None:
-                    consecutive_errors += 1
-                    if consecutive_errors > 5:
-                        log("Too many connection errors. Exiting loop.", RED)
-                        break
-                    time.sleep(5)
-                    continue
-                consecutive_errors = 0
-                
-                in_queue = status.get("in_queue", False)
-                wait_seconds = status.get("wait_seconds", 0)
-                queue_state = status.get("status")
-                
-                # Check for active battles
-                latest_battle = self.get_my_latest_battle()
-                battle_active = latest_battle is not None and latest_battle.get("status") in ["pending", "running"]
-                
-                # 2. Process finished battles
-                if latest_battle:
-                    bid = latest_battle.get("id")
-                    if bid > self.last_processed_battle_id and latest_battle.get("status") not in ["pending", "running"]:
-                        self.process_battle_result(latest_battle)
-                        self.last_processed_battle_id = bid
-                        time.sleep(2)
-                        continue
+                # 1. Process finished battles
+                self.process_finished_battles()
 
-                # 3. Handle active/waiting state
-                if battle_active:
-                    log(f"Battle #{latest_battle.get('id')} is currently in progress. Status: {latest_battle.get('status')}. Waiting...", MAGENTA)
-                    time.sleep(5)
-                    continue
-                    
-                if in_queue:
-                    log(f"In queue... Status: {queue_state} | Elapsed: {wait_seconds}s", CYAN)
-                    time.sleep(5)
-                    continue
-                    
-                # 4. Action state (not in queue, no battle active)
-                if self.mode == "queue":
-                    log("Not in queue. Re-queueing...", YELLOW)
-                    self.join_queue()
-                elif self.mode == "challenge":
-                    opp = self.find_best_opponent()
-                    if opp:
-                        self.challenge_player(opp["user_id"])
-                    else:
-                        log("No valid opponents to challenge. Falling back to queueing.", YELLOW)
-                        self.join_queue()
+                # 2. Challenge state (non-blocking)
+                opp = self.find_best_opponent()
+                if opp:
+                    self.challenge_player(opp)
+                    # Sleep a tiny bit to avoid hammering the API
+                    time.sleep(2)
+                else:
+                    log("No valid opponents to challenge (all avoided or none match). Waiting 30 seconds...", YELLOW)
+                    time.sleep(30)
                         
                 time.sleep(5)
 
@@ -636,24 +722,11 @@ class MLArenaMatchmaker:
                 print("\n")
                 if self.exit_requested:
                     log("Force exit requested. Exiting immediately.", RED)
-                    self.leave_queue()
                     sys.exit(1)
                 
-                # Set exit requested flag
                 self.exit_requested = True
                 log("KeyboardInterrupt detected. Graceful shutdown initiated.", YELLOW)
                 
-                # Check if there is an active battle right now
-                latest_battle = self.get_my_latest_battle()
-                battle_active = latest_battle is not None and latest_battle.get("status") in ["pending", "running"]
-                
-                if battle_active:
-                    log(f"Waiting for current Battle #{latest_battle.get('id')} to finish before stopping. Press Ctrl+C again to force quit.", YELLOW + BOLD)
-                else:
-                    log("No active battles. Leaving queue and exiting gracefully.", GREEN)
-                    self.leave_queue()
-                    sys.exit(0)
-                    
             except Exception as e:
                 log(f"Error in matchmaker loop: {e}", RED)
                 import traceback
@@ -663,7 +736,7 @@ class MLArenaMatchmaker:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="ML Arena Chess Matchmaker")
-    parser.add_argument("--slot", type=int, default=1, choices=[0, 1, 2], help="Slot index (default: 1)")
+    parser.add_argument("--slot", type=int, default=2, choices=[0, 1, 2], help="Slot index (default: 2)")
     args = parser.parse_args()
 
     matchmaker = MLArenaMatchmaker(slot_index=args.slot)
