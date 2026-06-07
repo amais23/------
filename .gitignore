@@ -1,0 +1,10 @@
+*.rtbw
+rl_starter_11/venv
+rl_starter_11/syzygy
+*.pyc
+*.bin
+*.json
+*.bin
+rl_starter_12/.venv
+
+.DS_Store
