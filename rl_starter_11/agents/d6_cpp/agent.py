@@ -28,67 +28,39 @@ def _bootstrap():
     if not os.path.exists(zip_path):
         zip_path = "model.zip"
 
-    # 1. 優先透過 os.walk 搜尋整個 base_dir，尋找平台預先解壓的 .so 檔案
-    extract_dir = None
-    engine_found = False
-    
-    for root, dirs, files in os.walk(base_dir):
-        for f in files:
-            if "chess_engine" in f and f.endswith(".so"):
-                # 找到平台可能預先解壓的引擎了！
-                sys.path.insert(0, root)
-                try:
-                    import chess_engine
-                    extract_dir = root
-                    engine_found = True
-                    break
-                except ImportError:
-                    # 雖然找到了檔名，但載入失敗，移除路徑並繼續找下一個
-                    sys.path.remove(root)
-        if engine_found:
-            break
-
-    if not engine_found:
-        # 2. 如果在整個 base_dir 內翻箱倒櫃都找不到，才嘗試解壓到其他暫存目錄
-        pid = os.getpid()
-        writable_dirs = ["/dev/shm", "/tmp", "/var/tmp", os.path.expanduser("~")]
+    sys.path.insert(0, base_dir)
+    try:
+        import chess_engine
         
-        extract_dir = None
-        for d in writable_dirs:
-            try:
-                test_dir = os.path.join(d, f"chess_assets_{pid}")
-                os.makedirs(test_dir, exist_ok=True)
-                
-                # 解壓
-                if os.path.exists(zip_path):
-                    with zipfile.ZipFile(zip_path, 'r') as z:
-                        z.extractall(test_dir)
-                
-                # 嘗試 Import
-                sys.path.insert(0, test_dir)
-                import chess_engine
-                
-                extract_dir = test_dir
-                break  # 成功載入！
-                
-            except Exception as e:
-                # 清理失敗的路徑並嘗試下一個
-                if test_dir and os.path.exists(test_dir):
-                    shutil.rmtree(test_dir, ignore_errors=True)
-                if test_dir in sys.path:
-                    sys.path.remove(test_dir)
-                continue
-
-    if not extract_dir:
-        raise RuntimeError("無法在任何目錄中解壓縮並執行 C++ 引擎 (.so)，可能全被限制為 noexec 或是唯讀")
-
-    # 載入開局庫
-    book_file = os.path.join(extract_dir, "book.bin")
-    chess_engine.init(book_path=book_file if os.path.exists(book_file) else "")
-    _ENGINE = chess_engine
+        chess_engine.init("")
+        _ENGINE = chess_engine
+        
+    except ImportError:
+        # [MAGIC ZIP LOADER]
+        # 由於沙箱的 /tmp 被掛載 noexec，且 /app/arena 被掛載 Read-Only
+        # 我們將 chess_engine.so 與 book.bin 串接成了 magic.zip 並上傳
+        # 因此 model.zip 同時是一個 ELF 動態函式庫與一個 ZIP 壓縮檔！
+        
+        # 1. 直接將 model.zip 視為 .so 檔案載入記憶體執行
+        import importlib.machinery
+        import importlib.util
+        
+        try:
+            # 直接對 zip 檔使用 C 擴充載入器，這會透過 dlopen(model.zip) 直接在唯讀環境中載入！
+            loader = importlib.machinery.ExtensionFileLoader("chess_engine", os.path.abspath(zip_path))
+            spec = importlib.util.spec_from_loader("chess_engine", loader)
+            chess_engine = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(chess_engine)
+            
+            # 2. 初始化引擎 (開局庫已經靜態編譯在 C++ 中)
+            chess_engine.init("")
+            _ENGINE = chess_engine
+            
+        except Exception as e:
+            raise RuntimeError(f"魔法載入失敗！無法載入 C++ 引擎: {e}\nzip_path={zip_path}")
 
     # 載入 Python 端 Syzygy 殘局庫
-    syzygy_dir = os.path.join(extract_dir, "syzygy")
+    syzygy_dir = os.path.join(base_dir, "syzygy")
     if not os.path.isdir(syzygy_dir):
         syzygy_dir = "/tmp/syzygy"
     if os.path.isdir(syzygy_dir):

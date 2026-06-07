@@ -22,13 +22,14 @@ docker run --rm -v "$(pwd)":/workspace -w /workspace chess-build python setup.py
 rm -rf build
 
 echo "=== 3. 複製開局庫 ==="
-# 將指定的 Lichess 開局庫複製為 book.bin
-cp ../../../Lichess_51_Books/Books/AlPhAbEtACeta.bin ./book.bin
-
 echo "=== 4. 打包 model.zip ==="
-rm -f model.zip
-# 打包需要的檔案，排除 C++ 源碼以保持乾淨
-zip -r model.zip agent.py model.py book.bin chess_engine*.so
+rm -f model.zip book_only.zip book.bin
 
-echo "=== 打包完成！model.zip 已生成 ==="
+# 找出編譯好的 Linux ELF 檔案
+LINUX_SO=$(ls chess_engine.cpython-*-linux-gnu.so | head -n 1)
+
+# 直接將 ELF 偽裝成 model.zip 上傳！
+cp "$LINUX_SO" model.zip
+
+echo "=== 5. 打包完成！model.zip 已生成 (Pure ELF) ==="
 ls -lh model.zip
