@@ -2378,7 +2378,34 @@ class Board {
      * @return
      */
     [[nodiscard]] Square kingSq(Color color) const noexcept {
-        assert(pieces(PieceType::KING, color) != 0ull);
+        if (pieces(PieceType::KING, color) == 0ull) {
+            std::cerr << "CRITICAL ERROR: kingSq called but color " << static_cast<int>(color) 
+                      << " has no king on the board!" << std::endl;
+            std::cerr << "Board occupancy count: " << occ().count() << std::endl;
+            std::cerr << "White king count: " << pieces(PieceType::KING, Color::WHITE).count() << std::endl;
+            std::cerr << "Black king count: " << pieces(PieceType::KING, Color::BLACK).count() << std::endl;
+            std::cerr << "Simple board representation:" << std::endl;
+            for (int r = 7; r >= 0; r--) {
+                for (int c = 0; c < 8; c++) {
+                    int sq_idx = r * 8 + c;
+                    Piece p = board_[sq_idx];
+                    if (p == Piece::NONE) std::cerr << ". ";
+                    else {
+                        char p_char = '?';
+                        if (p.type() == PieceType::PAWN) p_char = 'P';
+                        else if (p.type() == PieceType::KNIGHT) p_char = 'N';
+                        else if (p.type() == PieceType::BISHOP) p_char = 'B';
+                        else if (p.type() == PieceType::ROOK) p_char = 'R';
+                        else if (p.type() == PieceType::QUEEN) p_char = 'Q';
+                        else if (p.type() == PieceType::KING) p_char = 'K';
+                        if (p.color() == Color::BLACK) p_char = std::tolower(p_char);
+                        std::cerr << p_char << " ";
+                    }
+                }
+                std::cerr << std::endl;
+            }
+            std::abort();
+        }
         return pieces(PieceType::KING, color).lsb();
     }
 
@@ -3886,7 +3913,7 @@ template <Color::underlying c>
     auto king_sq          = board.kingSq(~c);
     Bitboard map_king_atk = attacks::king(king_sq) & enemy_empty;
 
-    if (map_king_atk == Bitboard(0ull) && !board.chess960()) return 0ull;
+    // if (map_king_atk == Bitboard(0ull) && !board.chess960()) return 0ull;
 
     auto occ     = board.occ() ^ Bitboard::fromSquare(king_sq);
     auto queens  = board.pieces(PieceType::QUEEN, c);

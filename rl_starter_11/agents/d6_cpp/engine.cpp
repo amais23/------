@@ -8,8 +8,8 @@
 #include <iostream>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
+#include <random>
 #include <string>
-#include <unordered_map>
 #include <vector>
 #include <stdexcept>
 
@@ -740,17 +740,7 @@ inline int move_to_action(Move move) {
   return (col * 8 + row) * 73 + get_move_plane(move);
 }
 
-// BUG-2: Fixed modular bias by replacing bitwise & with modulus
-inline int fallback_random(const py::detail::unchecked_reference<int8_t, 1> &mask) {
-  std::vector<int> legals;
-  for (int i = 0; i < 4672; i++) {
-    if (mask(i) == 1)
-      legals.push_back(i);
-  }
-  if (legals.empty())
-    return 0;
-  return legals[rand() % legals.size()]; // Fast random
-}
+// [REMOVED] fallback_random: Dead code, solve() now throws instead of falling back to random.
 
 inline bool has_major_pieces(const Board &board) {
   for (Color c : {Color::WHITE, Color::BLACK}) {
@@ -784,6 +774,8 @@ private:
   int m_history[2][64][64]; // [color][from][to]
   uint64_t m_passed_pawn_masks[2][64];
   std::vector<BookEntry> m_book_entries;
+  // BUG-5: Per-instance RNG replaces global rand() to avoid shared mutable state
+  std::mt19937 m_rng;
 
   inline void tt_store(uint64_t key, int depth, int score, TTFlag flag,
                        Move best_move) {
@@ -799,7 +791,7 @@ private:
   }
 
 public:
-  SearchEngine() {
+  SearchEngine() : m_rng(std::random_device{}()) {
     m_tt.resize(TT_SIZE);
     std::memset(m_killers, 0, sizeof(m_killers));
     std::memset(m_history, 0, sizeof(m_history));
@@ -832,7 +824,6 @@ public:
   }
 
   void init(const std::string &book_path) {
-    srand(static_cast<unsigned>(time(NULL)));
     m_book_path = book_path;
     load_book(book_path);
 
@@ -926,7 +917,7 @@ public:
     if (total_weight == 0)
       return Move::NO_MOVE;
 
-    int r = rand() % total_weight;
+    int r = static_cast<int>(m_rng() % static_cast<unsigned>(total_weight));
     int cumulative = 0;
     BookEntry chosen = matches[0];
     for (const auto &m : matches) {
@@ -1368,8 +1359,16 @@ public:
     return best_score;
   }
 
-  Move search_best_move(Board &board, int max_depth,
+  // BUG-5 FIX: Board passed by VALUE to prevent timeout-induced corruption
+  // from propagating back to solve().
+  // When alpha_beta throws timeout, exception unwinding skips board.unmakeMove()
+  // calls, leaving the board in a wrong position. If solve() then calls
+  // board.makeMove(best) on the corrupted board, the from-square may be empty,
+  // causing removePiece(NONE) → pieces_bb_[6] out-of-bounds → SIGSEGV (Code 139).
+  Move search_best_move(Board board, int max_depth,
                         std::vector<uint64_t> &search_history) {
+    std::fill(m_tt.begin(), m_tt.end(), TTEntry{0, 0, Move::NO_MOVE, 0, TT_EXACT});
+    Board original_board = board; // Keep a clean copy of the uncorrupted board
     m_search_start = std::chrono::steady_clock::now();
     m_node_count = 0;
 
@@ -1467,7 +1466,7 @@ public:
 
     if (best_move == Move::NO_MOVE) {
       Movelist fallback;
-      movegen::legalmoves(fallback, board);
+      movegen::legalmoves(fallback, original_board); // Use clean copy!
       if (fallback.size() > 0)
         best_move = fallback[0];
     }

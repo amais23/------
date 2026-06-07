@@ -32,7 +32,7 @@ def main():
     # Define metadata based on agent_type
     if AGENT_TYPE == "d6_cpp":
         SLOT_NAME = "D6 Engine"
-        DESCRIPTION = "D6 Ported Search Engine (Depth 8-10, TT, LMR, Polyglot Book, Syzygy)"
+        DESCRIPTION = "D6 Ported Search Engine (Depth 8-10, TT, LMR, Polyglot Book, Syzygy) 202606080147"
     elif AGENT_TYPE == "d5_pro":
         SLOT_NAME = "D5 Pro"
         DESCRIPTION = "D5 Pro (Parallel Alpha-Beta + Fallback)"
