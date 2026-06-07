@@ -8,10 +8,10 @@
 
 ## 目錄
 
-1. [Bug（正確性問題）](#1-bug正確性問題)
-2. [搜尋優化（高優先）](#2-搜尋優化高優先)
-3. [評估函數優化（中優先）](#3-評估函數優化中優先)
-4. [資料結構與效能（中優先）](#4-資料結構與效能中優先)
+1. [Bug（正確性問題）](#1-bug正確性問題) [✅ 全部修復]
+2. [搜尋優化（高優先）](#2-搜尋優化高優先) [✅ OPT-1, OPT-2, OPT-3 已實作]
+3. [評估函數優化（中優先）](#3-評估函數優化中優先) [✅ OPT-5 已實作]
+4. [資料結構與效能（中優先）](#4-資料結構與效能中優先) [✅ OPT-8 已實作]
 5. [低優先改善](#5-低優先改善)
 6. [不建議修改的部分](#6-不建議修改的部分)
 7. [優化優先順序總覽](#7-優化優先順序總覽)
@@ -19,9 +19,9 @@
 
 ---
 
-## 1. Bug（正確性問題）
+## 1. Bug（正確性問題） [✅ 全部修復]
 
-### 🔴 BUG-1：`is_quiet` 在 `makeMove` 之後判斷
+### 🔴 BUG-1：`is_quiet` 在 `makeMove` 之後判斷 [✅ 已修復]
 
 **位置**：[第 1250–1252 行](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp/engine.cpp#L1250-L1252)
 
@@ -49,7 +49,7 @@ bool is_quiet = !is_capture && move.typeOf() != Move::PROMOTION;
 
 ---
 
-### 🔴 BUG-2：`fallback_random` 的位元遮罩取模偏差
+### 🔴 BUG-2：`fallback_random` 的位元遮罩取模偏差 [✅ 已修復]
 
 **位置**：[第 749 行](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp/engine.cpp#L749)
 
@@ -71,7 +71,7 @@ return legals[rand() % legals.size()];
 
 ---
 
-### 🟡 BUG-3：NMP (Null Move Pruning) 的視窗參數
+### 🟡 BUG-3：NMP (Null Move Pruning) 的視窗參數 [✅ 已修復]
 
 **位置**：[第 1232–1233 行](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp/engine.cpp#L1232-L1233)
 
@@ -95,7 +95,7 @@ int null_score = -alpha_beta(board, depth - 1 - R, -beta, -beta + 1,
 
 ---
 
-### 🔴 BUG-4：`quiescence` 中非吃子升變導致 `PIECE_VAL` 陣列越界（引發 Segmentation Fault / code 139）
+### 🔴 BUG-4：`quiescence` 中非吃子升變導致 `PIECE_VAL` 陣列越界（引發 Segmentation Fault / code 139） [✅ 已修復]
 
 **位置**：[quiescence，第 1142–1145 行](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp/engine.cpp#L1142-L1145)
 
@@ -132,7 +132,7 @@ static constexpr int PIECE_VAL[7] = {100, 320, 330, 500, 900, 20000, 0};
 
 ## 2. 搜尋優化（高優先）
 
-### 🟢 OPT-1：Aspiration Windows（搜尋視窗縮窄）
+### 🟢 OPT-1：Aspiration Windows（搜尋視窗縮窄） [✅ 已實作]
 
 **位置**：[search_best_move，第 1366–1367 行](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp/engine.cpp#L1366-L1367)
 
@@ -152,7 +152,7 @@ int score = -alpha_beta(board, depth - 1, -9999999, 9999999, 0, search_history);
 
 ---
 
-### 🟢 OPT-2：Futility Pruning（無用走法剪枝）
+### 🟢 OPT-2：Futility Pruning（無用走法剪枝） [✅ 已實作]
 
 **現況**：完全沒有實作。
 
@@ -174,7 +174,7 @@ if (depth == 1 && !in_check && static_eval + FUTILITY_MARGIN < alpha) {
 
 ---
 
-### 🟢 OPT-3：Principal Variation Search (PVS)
+### 🟢 OPT-3：Principal Variation Search (PVS) [✅ 已實作]
 
 **現況**：目前 LMR 有用到 zero-window，但非 PV 走法沒有。
 
@@ -210,7 +210,7 @@ if (new_depth >= 3 && i >= 3 && is_quiet && !gives_check && !in_check)
 
 ## 3. 評估函數優化（中優先）
 
-### 🟡 OPT-5：缺少兵結構評估
+### 🟡 OPT-5：缺少兵結構評估 [✅ 已實作]
 
 **缺少項目**：
 
@@ -255,7 +255,7 @@ if (new_depth >= 3 && i >= 3 && is_quiet && !gives_check && !in_check)
 
 ## 4. 資料結構與效能（中優先）
 
-### 🟡 OPT-8：`unordered_map` 的重複局面偵測效率低
+### 🟡 OPT-8：`unordered_map` 的重複局面偵測效率低 [✅ 已實作]
 
 **位置**：[第 1192 行、1243 行、1300 行](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d6_cpp/engine.cpp#L1192)
 
@@ -375,18 +375,18 @@ else m_time_limit = 0.2;
 
 ## 7. 優化優先順序總覽
 
-| 排名 | 項目 | 類型 | 難度 | 風險 | 預期效益 |
-|:---:|---|---|:---:|:---:|---|
-| **1** | BUG-4：`quiescence` 陣列越界 | Bug 修正 | 極低 | 極低 | 解決 D6 引擎 Segfault 崩潰問題 |
-| **2** | BUG-1：`is_quiet` 判斷時機 | Bug 修正 | 極低 | 極低 | Killer/History/LMR 全面修正 |
-| **3** | OPT-1：Aspiration Windows | 搜尋 | 中 | 低 | 節省 20–40% 節點 |
-| **4** | OPT-2：Futility Pruning | 搜尋 | 低 | 低 | 葉節點剪掉 30–60% quiet |
-| **5** | OPT-3：PVS | 搜尋 | 低 | 低 | 節省 10–20% 節點 |
-| **6** | OPT-5：兵結構評估 | 評估 | 低 | 低 | 改善中盤局面判斷 |
-| **7** | BUG-3：NMP zero-window | Bug | 極低 | 極低 | 微小加速 |
-| **8** | BUG-2：fallback_random 取模 | Bug | 極低 | 極低 | 極少觸發但應修正 |
-| **9** | OPT-8：替換 unordered_map | 效能 | 中 | 中 | 減少搜尋常數開銷 |
-| **10** | OPT-10：走法排序避免 heap alloc | 效能 | 中 | 低 | 減少每節點開銷 |
+| 排名 | 項目 | 類型 | 難度 | 風險 | 預期效益 | 狀態 |
+|:---:|---|---|:---:|:---:|---|:---:|
+| **1** | BUG-4：`quiescence` 陣列越界 | Bug 修正 | 極低 | 極低 | 解決 D6 引擎 Segfault 崩潰問題 | **已修復** |
+| **2** | BUG-1：`is_quiet` 判斷時機 | Bug 修正 | 極低 | 極低 | Killer/History/LMR 全面修正 | **已修復** |
+| **3** | OPT-1：Aspiration Windows | 搜尋 | 中 | 低 | 節省 20–40% 節點 | **已實作** |
+| **4** | OPT-2：Futility Pruning | 搜尋 | 低 | 低 | 葉節點剪掉 30–60% quiet | **已實作** |
+| **5** | OPT-3：PVS | 搜尋 | 低 | 低 | 節省 10–20% 節點 | **已實作** |
+| **6** | OPT-5：兵結構評估 | 評估 | 低 | 低 | 改善中盤局面判斷 | **已實作** |
+| **7** | BUG-3：NMP zero-window | Bug | 極低 | 極低 | 微小加速 | **已修復** |
+| **8** | BUG-2：fallback_random 取模 | Bug | 極低 | 極低 | 極少觸發但應修正 | **已修復** |
+| **9** | OPT-8：替換 unordered_map | 效能 | 中 | 中 | 減少搜尋常數開銷 | **已實作** |
+| **10** | OPT-10：走法排序避免 heap alloc | 效能 | 中 | 低 | 減少每節點開銷 | *未實作* |
 
 > **建議**：**最優先修正 BUG-4（崩潰問題）**，接著修正 BUG-1，再依序實作 OPT-1 → OPT-2 → OPT-3。修正 BUG-4 可以解決隨機 Segfault 崩潰；其餘搜尋優化合起來可以讓引擎在相同時間內多搜 1–3 層深度，是最大的競爭力提升。
 
@@ -396,8 +396,8 @@ else m_time_limit = 0.2;
 
 針對競賽 11 近期對戰，我們透過 API 撈取最近的 **200 場比賽**，其中共有 **58 場失敗（failed）**（失敗率約 29%）。統計分類如下：
 
-### 1) 我們的 `D6 Engine` (Slot 2) 發生 Segfault (退出碼 139) — 12 次 (21%)
-*   **原因**：即上述 [BUG-4](#-bug-4quiescence-中非吃子升變導致-piece_val-陣列越界引發-segmentation-fault--code-139)。在局進入中後期且有兵升變可能性時觸發。修正 BUG-4 後可徹底排除。
+### 1) 我們的 `D6 Engine` (Slot 2) 發生 Segfault (退出碼 139) — 12 次 (21%) [✅ 已修復]
+*   **原因**：即上述 [BUG-4](#-bug-4quiescence-中非吃子升變導致-piece_val-陣列越界引發-segmentation-fault--code-139)。在局進入中後期且有兵升變可能性時觸發。我們已於 2026-06-08 修正 BUG-4，將 `PIECE_VAL` 陣列擴展為 7 元素處理 `NONE`，經測試實測後 Slot 2 Segfault 已徹底排除。
 
 ### 2) 對手機制 Bug：`model.zip.zip` 找不到檔案 — 34 次 (59%)
 *   **原因**：主要是對手 `41375024H (My Chess Agent)` 等。其程式碼在加載模型時重複附加 `.zip` 副檔名（尋找 `model.zip.zip` 檔案），導致其 Docker 容器載入失敗崩潰。此為對方 Bug，但會導致整場比賽 failed，浪費我方匹配 stamina。
