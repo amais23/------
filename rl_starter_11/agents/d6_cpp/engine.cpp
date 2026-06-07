@@ -1475,8 +1475,20 @@ public:
   }
 
   int solve(py::array_t<int8_t> obs, py::array_t<int8_t> mask, int tb_action) {
-    std::string fen = rebuild_fen_from_observation(obs);
-    Board board(fen);
+    bool has_white_king = false;
+    bool has_black_king = false;
+    auto obs_unchecked = obs.unchecked<3>();
+    for (int r = 0; r < 8; r++) {
+      for (int c = 0; c < 8; c++) {
+        if (obs_unchecked(r, c, 12)) has_white_king = true;
+        if (obs_unchecked(r, c, 18)) has_black_king = true;
+      }
+    }
+
+    Board board = (has_white_king && has_black_king) 
+                  ? Board(rebuild_fen_from_observation(obs)) 
+                  : Board();
+
     auto mask_r = mask.unchecked<1>();
 
     detect_new_game_and_color(board);
