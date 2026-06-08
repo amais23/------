@@ -24,7 +24,7 @@ def main():
     parser.add_argument("--upload", action="store_true", help="Upload flag (kept for compatibility)")
     args = parser.parse_args()
 
-    STUDENT_ID     = "41241213S"
+    STUDENT_ID     =  None  #"41170030H"
     COMPETITION_ID = 11
     SLOT_INDEX     = args.slot
     AGENT_TYPE     = args.agent_type
