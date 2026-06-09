@@ -7,7 +7,7 @@ from collections import defaultdict
 import numpy as np
 
 from model import (
-    ALGORITHM, extract_strategic_features, heuristic_execute, check_action_safety, is_in_house
+    ALGORITHM, extract_strategic_features, heuristic_execute, check_action_safety, is_in_house, align_coordinates_to_graph
 )
 
 class Agent:
@@ -16,6 +16,7 @@ class Agent:
         self.model = ALGORITHM.load(weights_path, device="cpu")
         self._state = None
         self.prev_level = None
+        self.safety_margin = 7.0
         
         # Load all pre-built graphs for Mazes 1-4
         from model import (
@@ -60,10 +61,12 @@ class Agent:
 
     def act(self, observation: np.ndarray, _action_space) -> int:
         """
-        Extract strategic features, predict macro action with PPO,
-        translate to cardinal moves, and apply lookahead safety filter.
+        Extract strategic features, predict macro action with MaskablePPO,
+        and translate to cardinal moves.
         """
         level = int(observation[123]) >> 4
+        self.safety_margin = 7.0 + min(level * 0.8, 4.0)
+        
         if self.prev_level is not None and level != self.prev_level:
             from model import get_maze_id, init_pellets_and_energizers
             maze_id = get_maze_id(level)
@@ -83,24 +86,9 @@ class Agent:
             self.prev_p = None
         self.prev_extra_lives = curr_extra_lives
 
-        # 1. Extract strategic features
-        feats, self.prev_p = extract_strategic_features(
-            observation, self.graph, self.prev_p, self.remaining_pellets, self.remaining_energizers, self.visited_nodes, self.prev_ghosts_pos
-        )
-        
-        # 2. Get PPO action prediction (strategy_id)
-        strategy_id, self._state = self.model.predict(
-            feats, state=self._state, deterministic=True
-        )
-        strategy_id = int(strategy_id)
-        
-        # 3. Translate strategy to low level cardinal action (1-4)
-        low_level_action = heuristic_execute(
-            strategy_id, observation, self.graph, self.remaining_pellets, self.remaining_energizers, self.last_action
-        )
-        
-        # 4. Apply Safety Lookahead Filter
+        # Decode variables for safety and masks
         px, py = int(observation[10]), int(observation[16])
+        px, py = align_coordinates_to_graph(self.graph, px, py)
         blue_timer = int(observation[116])
         
         ghosts_pos = []
@@ -113,21 +101,41 @@ class Agent:
             in_h = is_in_house(gx, gy)
             ghosts_in_house.append(in_h)
             is_blue.append((blue_timer > 0) and not in_h)
-            
-        if low_level_action in [1, 2, 3, 4] and check_action_safety(
-            self.graph, px, py, low_level_action, ghosts_pos, self.prev_ghosts_pos, is_blue, ghosts_in_house
-        ):
-            actual_action = low_level_action
-        else:
-            # Override with safest escape action (strategy 2)
-            escape_action = heuristic_execute(
-                2, observation, self.graph, self.remaining_pellets, self.remaining_energizers, self.last_action
+
+        # 1. Extract strategic features
+        feats, self.prev_p = extract_strategic_features(
+            observation, self.graph, self.prev_p, self.remaining_pellets, self.remaining_energizers, self.visited_nodes, self.prev_ghosts_pos
+        )
+        
+        # 2. Calculate Action Masks for MaskablePPO inference
+        masks = []
+        for strategy_id in range(6):
+            low_level_action = heuristic_execute(
+                strategy_id, observation, self.graph, self.remaining_pellets, self.remaining_energizers, self.last_action
             )
-            if escape_action in [1, 2, 3, 4]:
-                actual_action = escape_action
+            if low_level_action in [1, 2, 3, 4]:
+                is_safe = check_action_safety(
+                    self.graph, px, py, low_level_action, ghosts_pos, self.prev_ghosts_pos, is_blue, ghosts_in_house, safety_margin=self.safety_margin
+                )
             else:
-                actual_action = low_level_action # fallback if escape itself is invalid
-                
+                is_safe = False
+            masks.append(is_safe)
+        if not any(masks):
+            masks[2] = True
+        action_masks = np.array(masks, dtype=bool)
+
+        # 3. Predict strategy using MaskablePPO with action masks
+        strategy_id, self._state = self.model.predict(
+            feats, state=self._state, deterministic=True, action_masks=action_masks
+        )
+        strategy_id = int(strategy_id)
+        
+        # 4. Translate strategy to low level action
+        low_level_action = heuristic_execute(
+            strategy_id, observation, self.graph, self.remaining_pellets, self.remaining_energizers, self.last_action
+        )
+        actual_action = low_level_action if low_level_action in [1, 2, 3, 4] else 0
+        
         self.prev_ghosts_pos = ghosts_pos
         self.last_action = actual_action
         return actual_action

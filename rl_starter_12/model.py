@@ -3,7 +3,7 @@
 Both train.py and agent.py import from here — change once, sync everywhere.
 """
 
-from stable_baselines3 import PPO
+from sb3_contrib import MaskablePPO
 import numpy as np
 import base64
 import zlib
@@ -11,12 +11,35 @@ import heapq
 from collections import defaultdict
 
 # ═══ Option D Hierarchical Configuration ═════════════════════════
-ALGORITHM     = PPO           # SB3 algorithm class
+ALGORITHM     = MaskablePPO   # SB3-contrib algorithm class
 POLICY        = "MlpPolicy"   # Use MLP policy on top of strategic features
 POLICY_KWARGS = dict(          # Smaller architecture for macro-actions
     net_arch=dict(pi=[128, 128], vf=[128, 128])
 )
 SAVE_PATH     = "model"        # SB3 appends .zip
+
+from typing import Callable
+
+def linear_schedule(initial_value: float) -> Callable[[float], float]:
+    """
+    Linear schedule helper for hyperparameters (e.g. learning rate, clip range).
+    :param initial_value: Initial value of the hyperparameter.
+    :return: Callable that returns the decayed value based on progress_remaining (1.0 -> 0.0).
+    """
+    def func(progress_remaining: float) -> float:
+        return progress_remaining * initial_value
+    return func
+
+# Optimizations for reaching 50,000+ points
+PPO_HYPERPARAMS = dict(
+    learning_rate=linear_schedule(3e-4), # Linear decay of learning rate
+    clip_range=linear_schedule(0.2),      # Linear decay of clip range
+    ent_coef=0.015,                       # Initial entropy coefficient (decayed via callback)
+    gamma=0.995,                          # Lookahead for long term goals (energizers, level clear)
+    n_steps=2048,
+    batch_size=64,
+    n_epochs=10,
+)
 # ══════════════════════════════════════════════════════════════════
 
 # Pre-built base64 encoded compressed graphs for Ms. Pacman Mazes 1-4
@@ -722,18 +745,18 @@ def get_neighbor_by_action(graph, px, py, action):
         if action == 3: # LEFT
             if px > 140 and nx < 25:
                 return (nx, ny)
-            if nx < px - 2 and abs(ny - py) < 5:
+            if nx < px and abs(ny - py) < 5:
                 return (nx, ny)
         elif action == 2: # RIGHT
             if px < 25 and nx > 140:
                 return (nx, ny)
-            if nx > px + 2 and abs(ny - py) < 5:
+            if nx > px and abs(ny - py) < 5:
                 return (nx, ny)
         elif action == 1: # UP
-            if ny < py - 2 and abs(nx - px) < 5:
+            if ny < py and abs(nx - px) < 5:
                 return (nx, ny)
         elif action == 4: # DOWN
-            if ny > py + 2 and abs(nx - px) < 5:
+            if ny > py and abs(nx - px) < 5:
                 return (nx, ny)
     return None
 
@@ -754,18 +777,18 @@ def get_action_to_neighbor(px, py, nx, ny):
         return 2 # RIGHT
         
     # Cardinal checks
-    if nx < px - 2 and abs(ny - py) < 5:
+    if nx < px and abs(ny - py) < 5:
         return 3 # LEFT
-    if nx > px + 2 and abs(ny - py) < 5:
+    if nx > px and abs(ny - py) < 5:
         return 2 # RIGHT
-    if ny < py - 2 and abs(nx - px) < 5:
+    if ny < py and abs(nx - px) < 5:
         return 1 # UP
-    if ny > py + 2 and abs(nx - px) < 5:
+    if ny > py and abs(nx - px) < 5:
         return 4 # DOWN
     return 0
 
 def get_ghost_valid_moves(graph, gx, gy, prev_gx, prev_gy):
-    """Get valid ghost moves excluding 180-degree reversal if heading is known."""
+    """Get valid ghost moves excluding 180-degree reversal if heading is known using vector dot product."""
     neighbors = graph[(gx, gy)]
     if prev_gx is None or prev_gy is None:
         return neighbors
@@ -775,19 +798,47 @@ def get_ghost_valid_moves(graph, gx, gy, prev_gx, prev_gy):
         return neighbors
     valid = set()
     for nx, ny in neighbors:
-        # Avoid reversal
-        if (dx > 0 and nx < gx - 2) or (dx < 0 and nx > gx + 2) or (dy > 0 and ny < gy - 2) or (dy < 0 and ny > gy + 2):
+        # Candidate step vector from current position to neighbor
+        v_nx = nx - gx
+        v_ny = ny - gy
+        # Dot product of current direction vector and candidate step vector
+        # If negative, the angle is > 90 degrees (indicating 180-degree turn back / reversal)
+        dot_product = dx * v_nx + dy * v_ny
+        if dot_product < 0:
             continue
         valid.add((nx, ny))
     return valid if valid else neighbors
 
-def dijkstra_distance_map(graph, start, max_dist=None):
+def dijkstra_distance_map(graph, start, max_dist=None, is_ghost=False):
     """Compute shortest path distance in physical pixels from start to all reachable nodes."""
     start = (int(start[0]), int(start[1]))
     dist_map = {start: 0.0}
+    
+    offset = 0.0
+    aligned_start = start
+    
     if start not in graph:
-        return dist_map
-    queue = [(0.0, start)]
+        # Ghost house / respawn soft alignment patch:
+        # Find the closest valid node in the graph. We enforce a maximum tolerance of 15.0 pixels
+        # generally, but dynamically extend it to 25.0 pixels if the ghost is inside the central ghost house.
+        min_dist = 9999.0
+        best_node = None
+        for node in graph:
+            d = float(abs(start[0] - node[0]) + abs(start[1] - node[1]))
+            if d < min_dist:
+                min_dist = d
+                best_node = node
+        
+        max_tol = 25.0 if is_in_house(start[0], start[1]) else 15.0
+        if best_node is not None and min_dist <= max_tol:
+            aligned_start = best_node
+            offset = min_dist
+            dist_map[aligned_start] = offset
+        else:
+            # Fallback if too far or graph is empty
+            return dist_map
+            
+    queue = [(offset, aligned_start)]
     while queue:
         d, curr = heapq.heappop(queue)
         if max_dist is not None and d > max_dist:
@@ -797,7 +848,7 @@ def dijkstra_distance_map(graph, start, max_dist=None):
         for neighbor in graph[curr]:
             weight = float(abs(curr[0] - neighbor[0]) + abs(curr[1] - neighbor[1]))
             if weight > 20: # Warp tunnel threshold
-                weight = 4.0
+                weight = 30.0 if is_ghost else 4.0
             nd = d + weight
             if neighbor not in dist_map or nd < dist_map[neighbor]:
                 dist_map[neighbor] = nd
@@ -811,7 +862,7 @@ def get_dist_from_map(dist_map, target, start_pos):
         return float(dist_map[target])
     return float(abs(start_pos[0] - target[0]) + abs(start_pos[1] - target[1]))
 
-def dijkstra_distance(graph, start, target, max_dist=None):
+def dijkstra_distance(graph, start, target, max_dist=None, is_ghost=False):
     """Calculate shortest path distance in pixels, fallback to Manhattan."""
     start = (int(start[0]), int(start[1]))
     target = (int(target[0]), int(target[1]))
@@ -832,7 +883,7 @@ def dijkstra_distance(graph, start, target, max_dist=None):
         for neighbor in graph[curr]:
             weight = float(abs(curr[0] - neighbor[0]) + abs(curr[1] - neighbor[1]))
             if weight > 20:
-                weight = 4.0
+                weight = 30.0 if is_ghost else 4.0
             nd = d + weight
             if neighbor not in dist_map or nd < dist_map[neighbor]:
                 dist_map[neighbor] = nd
@@ -864,8 +915,17 @@ def dijkstra_from_pacman(graph, start):
                 heapq.heappush(queue, (nd, neighbor))
     return paths_map
 
-def dijkstra_closest_target(paths_map, targets, start_pos):
-    """Find the closest target in the set of targets using precomputed paths_map."""
+def align_coordinates_to_graph(graph, x, y):
+    """Align raw coordinates to the closest valid node in the graph using Manhattan distance."""
+    node = (int(x), int(y))
+    if node in graph:
+        return node
+    # Find the closest node in the prebuilt graph
+    closest_node = min(graph.keys(), key=lambda n: abs(n[0] - node[0]) + abs(n[1] - node[1]))
+    return closest_node
+
+def dijkstra_closest_target(paths_map, targets, start_pos, graph=None):
+    """Find the closest target in the set of targets using precomputed paths_map with Manhattan fallback."""
     if not targets:
         return None, 9999.0, None
     reachable_targets = [t for t in targets if t in paths_map]
@@ -877,7 +937,17 @@ def dijkstra_closest_target(paths_map, targets, start_pos):
         # Fallback to Manhattan distance
         best_t = min(targets, key=lambda t: abs(start_pos[0]-t[0]) + abs(start_pos[1]-t[1]))
         dist = float(abs(start_pos[0]-best_t[0]) + abs(start_pos[1]-best_t[1]))
-        return best_t, dist, None
+        # 防禦性：在鄰接節點中，尋找一個與目標曼哈頓距離最短的鄰居作為首步 fallback
+        best_n = None
+        start_aligned = (int(start_pos[0]), int(start_pos[1]))
+        if graph is not None and start_aligned in graph:
+            min_n_dist = 9999.0
+            for n in graph[start_aligned]:
+                n_dist = abs(n[0] - best_t[0]) + abs(n[1] - best_t[1])
+                if n_dist < min_n_dist:
+                    min_n_dist = n_dist
+                    best_n = n
+        return best_t, dist, best_n
 
 def init_pellets_and_energizers(graph, maze_id):
     """Initialize pellets and energizer coordinates based on the loaded maze graph."""
@@ -937,8 +1007,9 @@ def update_dynamic_graph_and_targets(px, py, prev_p, level, graph, remaining_pel
             remaining_energizers.discard(node)
 
 def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_energizers, visited_nodes, prev_ghosts_pos):
-    """Extract a highly strategic 34-dimensional feature vector for macro actions."""
+    """Extract a highly strategic 36-dimensional feature vector for macro actions."""
     px, py = int(obs[10]), int(obs[16])
+    px, py = align_coordinates_to_graph(graph, px, py)
     level = int(obs[123]) >> 4
     
     update_dynamic_graph_and_targets(px, py, prev_p, level, graph, remaining_pellets, remaining_energizers, visited_nodes)
@@ -958,7 +1029,7 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
         ghosts_in_house.append(in_h)
         is_blue.append((blue_timer > 0) and not in_h)
         
-    ghost_dist_maps = [dijkstra_distance_map(graph, g) for g in ghosts_pos]
+    ghost_dist_maps = [dijkstra_distance_map(graph, g, is_ghost=True) for g in ghosts_pos]
     
     features = []
     
@@ -971,7 +1042,7 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
     for i, g_pos in enumerate(ghosts_pos):
         d = get_dist_from_map(ghost_dist_maps[i], (px, py), g_pos)
         ghost_dists.append(d)
-        features.append(min(d / 150.0, 1.0)) # Scaled by physical screen width
+        features.append(np.exp(-0.05 * d))
         
     # 7-14: Normalized ghost relative directions
     for i, g_pos in enumerate(ghosts_pos):
@@ -991,24 +1062,24 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
         if not is_blue[i] and not ghosts_in_house[i]:
             if d < min_non_blue_dist:
                 min_non_blue_dist = d
-    features.append(min(min_non_blue_dist / 150.0, 1.0))
+    features.append(np.exp(-0.05 * min_non_blue_dist))
     
     # 16: Blue timer
     features.append(blue_timer / 255.0)
     
     # 17: Closest remaining pellet distance
-    _, pellet_dist, _ = dijkstra_closest_target(pacman_paths, remaining_pellets, (px, py))
-    features.append(min(pellet_dist / 150.0, 1.0))
+    _, pellet_dist, _ = dijkstra_closest_target(pacman_paths, remaining_pellets, (px, py), graph)
+    features.append(np.exp(-0.05 * pellet_dist))
     
     # 18: Closest remaining energizer distance
-    _, energizer_dist, _ = dijkstra_closest_target(pacman_paths, remaining_energizers, (px, py))
-    features.append(min(energizer_dist / 150.0, 1.0))
+    _, energizer_dist, _ = dijkstra_closest_target(pacman_paths, remaining_energizers, (px, py), graph)
+    features.append(np.exp(-0.05 * energizer_dist))
     
     # 19: Remaining energizers ratio
     features.append(len(remaining_energizers) / 4.0)
     
-    # 20: Remaining pellets ratio
-    features.append(min(len(remaining_pellets) / 1645.0, 1.0))
+    # 20: Remaining pellets count (RAM 117 based with tanh)
+    features.append(np.tanh(int(obs[117]) / 100.0))
     
     # 21: Lives
     lives = int(obs[123]) & 0x0F
@@ -1027,7 +1098,7 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
                     d = get_dist_from_map(ghost_dist_maps[i], neighbor, g_pos)
                     if d < min_g_d:
                         min_g_d = d
-            features.append(min(min_g_d / 150.0, 1.0))
+            features.append(np.exp(-0.05 * min_g_d))
         else:
             features.append(0.0)
             
@@ -1047,12 +1118,28 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
         if is_blue[i]:
             if d < min_blue_dist:
                 min_blue_dist = d
-    features.append(min(min_blue_dist / 150.0, 1.0))
+    features.append(np.exp(-0.05 * min_blue_dist))
     
     # 34: Number of active blue ghosts
     num_blue = sum(1 for b in is_blue if b)
     features.append(num_blue / 4.0)
     
+    # 35-36: Fruit features (obs[14] is fruit X, obs[15] is fruit Y)
+    fx = int(obs[14])
+    fy = int(obs[15])
+    fruit_exists = (fx > 0 and fy > 0 and (fx, fy) != (0, 0))
+    if fruit_exists:
+        fruit_node = align_coordinates_to_graph(graph, fx, fy)
+        if fruit_node in pacman_paths:
+            fruit_dist = pacman_paths[fruit_node][0]
+        else:
+            fruit_dist = dijkstra_distance(graph, (px, py), fruit_node)
+        features.append(np.exp(-0.05 * fruit_dist))
+        features.append(1.0)
+    else:
+        features.append(0.0)
+        features.append(0.0)
+        
     return np.array(features, dtype=np.float32), (px, py)
 
 OPPOSITE_ACTIONS = {1: 4, 2: 3, 3: 2, 4: 1}
@@ -1060,6 +1147,7 @@ OPPOSITE_ACTIONS = {1: 4, 2: 3, 3: 2, 4: 1}
 def heuristic_execute(strategy_id, obs, graph, remaining_pellets, remaining_energizers, prev_action=0):
     """Translate high level strategy to cardinal action (1-4) or fallback (0)."""
     px, py = int(obs[10]), int(obs[16])
+    px, py = align_coordinates_to_graph(graph, px, py)
     blue_timer = int(obs[116])
     
     ghosts_pos = []
@@ -1075,27 +1163,44 @@ def heuristic_execute(strategy_id, obs, graph, remaining_pellets, remaining_ener
         
     pacman_paths = dijkstra_from_pacman(graph, (px, py))
     
-    def action_to_targets(targets):
+    def action_to_targets_cluster(targets):
         if not targets:
             return 0
-        _, _, next_node = dijkstra_closest_target(pacman_paths, targets, (px, py))
-        if next_node is not None:
-            return get_action_to_neighbor(px, py, next_node[0], next_node[1])
+        groups = defaultdict(list)
+        for t in targets:
+            if t in pacman_paths:
+                dist, first_step = pacman_paths[t]
+                if dist <= 25.0:
+                    groups[first_step].append(dist)
+        if not groups:
+            _, _, next_node = dijkstra_closest_target(pacman_paths, targets, (px, py), graph)
+            if next_node is not None:
+                return get_action_to_neighbor(px, py, next_node[0], next_node[1])
+            return 0
+        best_step = None
+        best_score = -1.0
+        for first_step, dists in groups.items():
+            score = sum(1.0 / (d + 1e-5) for d in dists)
+            if score > best_score:
+                best_score = score
+                best_step = first_step
+        if best_step is not None:
+            return get_action_to_neighbor(px, py, best_step[0], best_step[1])
         return 0
 
     if strategy_id == 0:  # Eat Pellet
-        return action_to_targets(remaining_pellets)
+        return action_to_targets_cluster(remaining_pellets)
         
     elif strategy_id == 1:  # Eat Energizer
-        act = action_to_targets(remaining_energizers)
+        act = action_to_targets_cluster(remaining_energizers)
         if act != 0:
             return act
-        return action_to_targets(remaining_pellets)
+        return action_to_targets_cluster(remaining_pellets)
         
     elif strategy_id == 2:  # Escape (with direction momentum)
         best_a = 0
         max_safety = -9999.0
-        ghost_dist_maps = [dijkstra_distance_map(graph, g) for g in ghosts_pos]
+        ghost_dist_maps = [dijkstra_distance_map(graph, g, is_ghost=True) for g in ghosts_pos]
         for a in [1, 2, 3, 4]:
             neighbor = get_neighbor_by_action(graph, px, py, a)
             if neighbor is not None:
@@ -1117,20 +1222,20 @@ def heuristic_execute(strategy_id, obs, graph, remaining_pellets, remaining_ener
                     best_a = a
         if best_a != 0:
             return best_a
-        return action_to_targets(remaining_pellets)
+        return action_to_targets_cluster(remaining_pellets)
         
     elif strategy_id == 3:  # Chase Blue (with timing guard)
         blue_ghosts = {ghosts_pos[i] for i in range(4) if is_blue[i]}
         if blue_ghosts:
-            closest_bg, dist, next_node = dijkstra_closest_target(pacman_paths, blue_ghosts, (px, py))
+            closest_bg, dist, next_node = dijkstra_closest_target(pacman_paths, blue_ghosts, (px, py), graph)
             # Speed safety timer guard: blue_timer > dist_in_pixels * 1.25
             if closest_bg is not None and blue_timer > dist * 1.25:
                 if next_node is not None:
                     return get_action_to_neighbor(px, py, next_node[0], next_node[1])
-        return action_to_targets(remaining_pellets)
+        return action_to_targets_cluster(remaining_pellets)
         
     elif strategy_id == 4:  # Wait/Lure
-        closest_e, dist, next_node = dijkstra_closest_target(pacman_paths, remaining_energizers, (px, py))
+        closest_e, dist, next_node = dijkstra_closest_target(pacman_paths, remaining_energizers, (px, py), graph)
         if closest_e is not None:
             if dist > 15.0: # pixel distance > 15
                 if next_node is not None:
@@ -1138,7 +1243,7 @@ def heuristic_execute(strategy_id, obs, graph, remaining_pellets, remaining_ener
             else:
                 # Close to energizer
                 min_ghost_dist = 9999.0
-                ghost_dist_maps = [dijkstra_distance_map(graph, g) for g in ghosts_pos]
+                ghost_dist_maps = [dijkstra_distance_map(graph, g, is_ghost=True) for g in ghosts_pos]
                 for i, g_pos in enumerate(ghosts_pos):
                     if not is_blue[i] and not ghosts_in_house[i]:
                         d = get_dist_from_map(ghost_dist_maps[i], (px, py), g_pos)
@@ -1154,12 +1259,35 @@ def heuristic_execute(strategy_id, obs, graph, remaining_pellets, remaining_ener
                             return get_action_to_neighbor(px, py, neighbor[0], neighbor[1])
                     if next_node is not None:
                         return get_action_to_neighbor(px, py, next_node[0], next_node[1])
-        return action_to_targets(remaining_pellets)
+        return action_to_targets_cluster(remaining_pellets)
+
+    elif strategy_id == 5:  # Chase Fruit
+        fx = int(obs[14])
+        fy = int(obs[15])
+        fruit_exists = (fx > 0 and fy > 0 and (fx, fy) != (0, 0))
+        if fruit_exists:
+            fruit_node = align_coordinates_to_graph(graph, fx, fy)
+            _, dist, next_node = dijkstra_closest_target(pacman_paths, {fruit_node}, (px, py), graph)
+            if next_node is not None:
+                return get_action_to_neighbor(px, py, next_node[0], next_node[1])
+        return action_to_targets_cluster(remaining_pellets)
 
     return 0
 
-def check_action_safety(graph, px, py, action, ghosts_pos, prev_ghosts_pos, is_blue, ghosts_in_house):
+def check_action_safety(graph, px, py, action, ghosts_pos, prev_ghosts_pos, is_blue, ghosts_in_house, safety_margin=12.0):
     """Lookahead 3-step Safety Filter with Ghost Momentum prediction and Safety Margin (Pixel distance)."""
+    px, py = align_coordinates_to_graph(graph, px, py)
+    
+    # Align current and previous ghost coordinates to graph nodes
+    aligned_ghosts_pos = []
+    for g in ghosts_pos:
+        aligned_ghosts_pos.append(align_coordinates_to_graph(graph, g[0], g[1]))
+        
+    aligned_prev_ghosts_pos = []
+    if prev_ghosts_pos:
+        for pg in prev_ghosts_pos:
+            aligned_prev_ghosts_pos.append(align_coordinates_to_graph(graph, pg[0], pg[1]))
+            
     P1 = get_neighbor_by_action(graph, px, py, action)
     active_ghost_indices = [i for i in range(4) if not is_blue[i] and not ghosts_in_house[i]]
     if not active_ghost_indices:
@@ -1171,18 +1299,18 @@ def check_action_safety(graph, px, py, action, ghosts_pos, prev_ghosts_pos, is_b
         if P1_est is None:
             return False
         for i in active_ghost_indices:
-            g = ghosts_pos[i]
-            if abs(P1_est[0] - g[0]) + abs(P1_est[1] - g[1]) <= 12.0:
+            g = aligned_ghosts_pos[i]
+            if abs(P1_est[0] - g[0]) + abs(P1_est[1] - g[1]) <= safety_margin:
                 return False
         return True
         
-    SAFETY_MARGIN = 12.0 # minimum buffer in pixels
+    SAFETY_MARGIN = safety_margin # minimum buffer in pixels
     
     # Precompute ghost potential states (cx, cy, px, py) at t=0, 1, 2, 3 to prevent reversal
     ghost_states_t = {0: []}
     for i in range(4):
-        g = ghosts_pos[i]
-        pg = prev_ghosts_pos[i] if prev_ghosts_pos else None
+        g = aligned_ghosts_pos[i]
+        pg = aligned_prev_ghosts_pos[i] if aligned_prev_ghosts_pos else None
         ghost_states_t[0].append({(int(g[0]), int(g[1]), int(pg[0]) if pg else None, int(pg[1]) if pg else None)})
         
     for t in [1, 2, 3]:
@@ -1200,7 +1328,7 @@ def check_action_safety(graph, px, py, action, ghosts_pos, prev_ghosts_pos, is_b
     # Check t=1 safety at P1
     for i in active_ghost_indices:
         for gx, gy, _, _ in ghost_states_t[1][i]:
-            d = dijkstra_distance(graph, P1, (gx, gy), max_dist=SAFETY_MARGIN)
+            d = dijkstra_distance(graph, P1, (gx, gy), max_dist=SAFETY_MARGIN, is_ghost=True)
             if d <= SAFETY_MARGIN:
                 return False
                 
@@ -1208,7 +1336,7 @@ def check_action_safety(graph, px, py, action, ghosts_pos, prev_ghosts_pos, is_b
     def is_node_safe(node, t):
         for i in active_ghost_indices:
             for gx, gy, _, _ in ghost_states_t[t][i]:
-                d = dijkstra_distance(graph, node, (gx, gy), max_dist=SAFETY_MARGIN)
+                d = dijkstra_distance(graph, node, (gx, gy), max_dist=SAFETY_MARGIN, is_ghost=True)
                 if d <= SAFETY_MARGIN:
                     return False
         return True
