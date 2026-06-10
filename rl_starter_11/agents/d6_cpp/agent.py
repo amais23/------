@@ -180,14 +180,24 @@ class Agent:
     def __init__(self):
         _bootstrap()
         self._local = threading.local()
+        self.last_nps = 0.0
+        self.last_score = 0
 
     def act(self, observation: np.ndarray, action_mask: np.ndarray) -> int:
         if not hasattr(self._local, "engine"):
-            self._local.engine = _ENGINE_MODULE.SearchEngine()
+            self._local.engine = _ENGINE_MODULE.SearchEngineD6()
             self._local.engine.init("")
             
         # 1. Python 端殘局庫探測（≤5 子時觸發）
         tb_action = _probe_syzygy(observation, action_mask)
 
         # 2. 呼叫 C++ 搜尋引擎
-        return int(self._local.engine.solve(observation, action_mask, tb_action))
+        try:
+            action = int(self._local.engine.solve(observation, action_mask, tb_action))
+            self.last_nps = float(self._local.engine.last_nps)
+            self.last_score = int(self._local.engine.last_score)
+            return action
+        except Exception as e:
+            self.last_nps = 0.0
+            self.last_score = 0
+            raise e

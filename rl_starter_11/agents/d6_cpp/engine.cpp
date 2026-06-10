@@ -791,6 +791,9 @@ private:
   }
 
 public:
+  double last_nps = 0;
+  int last_score = 0;
+
   SearchEngine() : m_rng(std::random_device{}()) {
     m_tt.resize(TT_SIZE);
     std::memset(m_killers, 0, sizeof(m_killers));
@@ -1471,6 +1474,11 @@ public:
         best_move = fallback[0];
     }
 
+    auto now = std::chrono::steady_clock::now();
+    double elapsed = std::chrono::duration<double>(now - m_search_start).count();
+    this->last_nps = elapsed > 0 ? (m_node_count / elapsed) : 0;
+    this->last_score = last_score;
+
     return best_move;
   }
 
@@ -1495,6 +1503,8 @@ public:
 
     // 1. Syzygy Tablebase probe (from Python)
     if (tb_action >= 0 && tb_action < 4672 && mask_r(tb_action) == 1) {
+      this->last_nps = 0;
+      this->last_score = 30000;
       return tb_action;
     }
 
@@ -1510,6 +1520,8 @@ public:
         board.makeMove(book_move);
         m_game_history.push_back(board.hash());
         board.unmakeMove(book_move);
+        this->last_nps = 0;
+        this->last_score = 0;
         return action;
       }
     }
@@ -1579,12 +1591,14 @@ int test_move_to_action(const std::string &fen, const std::string &uci_str) {
 PYBIND11_MODULE(chess_engine_d6_han, m) {
   m.doc() = "D6 C++ Chess Engine Module (Thread-Safe Instance Version)";
 
-  py::class_<SearchEngine>(m, "SearchEngine")
+  py::class_<SearchEngine>(m, "SearchEngineD6")
       .def(py::init<>())
       .def("init", &SearchEngine::init, py::arg("book_path") = "", "Initialize engine instance")
       .def("new_game", &SearchEngine::new_game, "Reset game-specific state")
       .def("solve", &SearchEngine::solve, py::arg("observation"), py::arg("action_mask"),
-           py::arg("tb_action") = -1, "Find best action");
+           py::arg("tb_action") = -1, "Find best action")
+      .def_readonly("last_nps", &SearchEngine::last_nps)
+      .def_readonly("last_score", &SearchEngine::last_score);
 
   m.def("test_move_to_action", &test_move_to_action, "Test move encoding");
   m.def("test_book_info", &test_book_info, "Test book hashing and probing");

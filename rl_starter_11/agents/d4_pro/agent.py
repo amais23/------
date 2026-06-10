@@ -172,6 +172,9 @@ class SearchTimeout(Exception):
 
 _SEARCH_START_TIME = 0.0
 _SEARCH_TIME_LIMIT = 999999.0
+_NODE_COUNT = 0
+_LAST_NPS = 0.0
+_LAST_SCORE = 0
 
 # 置換表：{zobrist_hash: (depth, score, flag, best_move)}
 # flag: 0=EXACT, 1=ALPHA (Upper Bound), 2=BETA (Lower Bound)
@@ -194,6 +197,8 @@ def _has_major_pieces(board: chess.Board, color: chess.Color) -> bool:
 
 def quiescence_minimax(board: chess.Board, alpha: int, beta: int, maximizing: bool, qdepth: int = 0) -> int:
     """靜態搜尋：在搜尋深度用盡後繼續搜尋吃子步，直到局面安靜。"""
+    global _NODE_COUNT
+    _NODE_COUNT += 1
     if time.time() - _SEARCH_START_TIME > _SEARCH_TIME_LIMIT:
         raise SearchTimeout()
 
@@ -257,6 +262,8 @@ def quiescence_minimax(board: chess.Board, alpha: int, beta: int, maximizing: bo
 
 # 💡 修改函數簽名，加入 search_history
 def alpha_beta(board: chess.Board, depth: int, alpha: int, beta: int, maximizing: bool, extensions: int = 0, search_history = None) -> int:
+    global _NODE_COUNT
+    _NODE_COUNT += 1
     if time.time() - _SEARCH_START_TIME > _SEARCH_TIME_LIMIT:
         raise SearchTimeout()
         
@@ -417,8 +424,9 @@ def alpha_beta(board: chess.Board, depth: int, alpha: int, beta: int, maximizing
 
 def search_best_move(board: chess.Board, max_depth: int, time_limit: float = 4.5, my_real_color = chess.WHITE, search_history = None) -> chess.Move:
     """在當前棋盤狀態下尋找最佳著法 (我方永遠是白方，因此我們必定是 maximizing)。"""
-    global _SEARCH_START_TIME, _SEARCH_TIME_LIMIT
+    global _SEARCH_START_TIME, _SEARCH_TIME_LIMIT, _NODE_COUNT, _LAST_NPS, _LAST_SCORE
     _SEARCH_START_TIME = time.time()
+    _NODE_COUNT = 0
     
     # 0. 查詢開局庫
     if BOOK_READER:
@@ -442,6 +450,8 @@ def search_best_move(board: chess.Board, max_depth: int, time_limit: float = 4.5
                 entry = BOOK_READER.weighted_choice(abs_board)
                 if entry:
                     abs_move = entry.move
+                    _LAST_NPS = 0.0
+                    _LAST_SCORE = 0
                     # 轉回黑方的相對 move
                     return chess.Move(
                         from_square=abs_move.from_square ^ 56,
@@ -450,6 +460,8 @@ def search_best_move(board: chess.Board, max_depth: int, time_limit: float = 4.5
                     )
             else:
                 entry = BOOK_READER.weighted_choice(board)
+                _LAST_NPS = 0.0
+                _LAST_SCORE = 0
                 return entry.move
         except IndexError:
             pass # 沒有對應的開局庫著法
@@ -476,6 +488,8 @@ def search_best_move(board: chess.Board, max_depth: int, time_limit: float = 4.5
                     best_tb_move = move
                     
             if best_tb_move:
+                _LAST_NPS = 0.0
+                _LAST_SCORE = best_tb_score
                 return best_tb_move
         except chess.syzygy.MissingTableError:
             pass
@@ -493,6 +507,7 @@ def search_best_move(board: chess.Board, max_depth: int, time_limit: float = 4.5
     _SEARCH_TIME_LIMIT = min(_SEARCH_TIME_LIMIT, time_limit)
     
     best_move = None
+    last_depth_score = 0
     
     try:
         for depth in range(1, max_depth + 1):
@@ -525,6 +540,7 @@ def search_best_move(board: chess.Board, max_depth: int, time_limit: float = 4.5
             
             # 完整搜完此深度才更新最佳步
             best_move = current_best
+            last_depth_score = current_best_val
             
     except SearchTimeout:
         pass
@@ -534,6 +550,10 @@ def search_best_move(board: chess.Board, max_depth: int, time_limit: float = 4.5
         if board.legal_moves:
             best_move = list(board.legal_moves)[0]
             
+    elapsed = time.time() - _SEARCH_START_TIME
+    _LAST_NPS = _NODE_COUNT / elapsed if elapsed > 0 else 0.0
+    _LAST_SCORE = last_depth_score
+
     return best_move
 
 # ────────────────────────────────────────────────────
@@ -544,6 +564,8 @@ class Agent:
         self.depth = SEARCH_DEPTH
         self.my_real_color = None
         self.real_game_history = {}  # 💡 新增：記錄真實對局的 Zobrist Hash 次數
+        self.last_nps = 0.0
+        self.last_score = 0
         TT.clear()  # 每局開始時清空置換表
         for i in range(64):
             KILLER_MOVES[i] = [None, None]
@@ -594,13 +616,19 @@ class Agent:
             if best_move is not None:
                 action = _m2a(best_move)
                 if 0 <= action < 4672 and action_mask[action] == 1:
+                    self.last_nps = float(_LAST_NPS)
+                    self.last_score = int(_LAST_SCORE)
                     return int(action)
 
             # 4. Fallback: 隨機合法步 (理論上不會觸發，除非無合法步)
+            self.last_nps = 0.0
+            self.last_score = 0
             legal = np.where(action_mask == 1)[0]
             return int(np.random.choice(legal)) if len(legal) else 0
 
         except Exception:
-            # 發生任何錯誤時降級為隨機合法步
+            # 發生 any 錯誤時降級為隨機合法步
+            self.last_nps = 0.0
+            self.last_score = 0
             legal = np.where(action_mask == 1)[0]
             return int(np.random.choice(legal)) if len(legal) else 0
