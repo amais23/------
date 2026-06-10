@@ -743,12 +743,14 @@ def get_neighbor_by_action(graph, px, py, action):
     for nx, ny in graph[(px, py)]:
         # Warp-around checks
         if action == 3: # LEFT
-            if px > 140 and nx < 25:
+            # Left warp: going LEFT (3) at left entrance (px < 25) warps to right side (nx > 140)
+            if px < 25 and nx > 140:
                 return (nx, ny)
             if nx < px and abs(ny - py) < 5:
                 return (nx, ny)
         elif action == 2: # RIGHT
-            if px < 25 and nx > 140:
+            # Right warp: going RIGHT (2) at right entrance (px > 140) warps to left side (nx < 25)
+            if px > 140 and nx < 25:
                 return (nx, ny)
             if nx > px and abs(ny - py) < 5:
                 return (nx, ny)
@@ -771,10 +773,10 @@ def get_neighbor_fallback(px, py, action):
 def get_action_to_neighbor(px, py, nx, ny):
     """Find the action (1-4) that moves Pacman from (px, py) to neighbor (nx, ny)."""
     # Warp checks
-    if px > 140 and nx < 25:
-        return 3 # LEFT
     if px < 25 and nx > 140:
-        return 2 # RIGHT
+        return 3 # LEFT (going left off the left edge warps to the right side)
+    if px > 140 and nx < 25:
+        return 2 # RIGHT (going right off the right edge warps to the left side)
         
     # Cardinal checks
     if nx < px and abs(ny - py) < 5:
@@ -949,20 +951,61 @@ def dijkstra_closest_target(paths_map, targets, start_pos, graph=None):
                     best_n = n
         return best_t, dist, best_n
 
+PELLET_BLACKLIST = {
+    1: set(),
+    2: {(88, y) for y in range(2, 25)} | {(88, y) for y in range(124, 157)},
+    3: {(88, y) for y in range(28, 49)},
+    4: {(88, y) for y in range(124, 145)}
+}
+
+def is_in_tunnel(x, y, maze_id):
+    """Check if coordinates lie inside the escape/warp tunnels for the given maze."""
+    if maze_id == 1:
+        return (72 <= y <= 88) and (x < 25 or x > 140)
+    elif maze_id == 2:
+        return (y == 62 or y == 158) and (x < 25 or x > 140)
+    elif maze_id == 3:
+        return (y == 98) and (x < 25 or x > 140)
+    elif maze_id == 4:
+        return (y == 74 or y == 98) and (x < 25 or x > 140)
+    return False
+
+def prune_invalid_warp_edges(graph, maze_id):
+    """Remove any left-to-right wrap-around edges in the graph that do not lie in a valid warp tunnel Y coordinate."""
+    for node in list(graph.keys()):
+        invalid_neighbors = []
+        for n in graph[node]:
+            is_warp = (node[0] <= 25 and n[0] > 140) or (node[0] > 140 and n[0] <= 25)
+            if is_warp:
+                if not is_in_tunnel(node[0], node[1], maze_id) or not is_in_tunnel(n[0], n[1], maze_id):
+                    invalid_neighbors.append(n)
+        for n in invalid_neighbors:
+            graph[node].discard(n)
+
+MAZE_ENERGIZERS = {
+    1: {(18, 11), (158, 11), (18, 139), (158, 139)},
+    2: {(18, 20), (158, 20), (18, 137), (158, 137)},
+    3: {(18, 14), (158, 14), (18, 146), (158, 146)},
+    4: {(18, 20), (158, 20), (18, 146), (158, 146)}
+}
+
 def init_pellets_and_energizers(graph, maze_id):
     """Initialize pellets and energizer coordinates based on the loaded maze graph."""
-    remaining_energizers = {(18, 14), (18, 146), (158, 14), (158, 146)}
+    prune_invalid_warp_edges(graph, maze_id)
+    remaining_energizers = MAZE_ENERGIZERS.get(maze_id, {(18, 14), (18, 146), (158, 14), (158, 146)}).copy()
     remaining_pellets = set()
+    blacklist = PELLET_BLACKLIST.get(maze_id, set())
     for node in graph:
         x, y = node[0], node[1]
         in_house = (75 <= x <= 101) and (72 <= y <= 88)
-        in_tunnel = (72 <= y <= 88) and (x < 25 or x > 140)
-        if not in_house and not in_tunnel:
+        in_tunnel = is_in_tunnel(x, y, maze_id)
+        if not in_house and not in_tunnel and (node not in remaining_energizers) and (node not in blacklist):
             remaining_pellets.add(node)
     return remaining_pellets, remaining_energizers
 
 def update_dynamic_graph_and_targets(px, py, prev_p, level, graph, remaining_pellets, remaining_energizers, visited_nodes):
     """Dynamically update connectivity graph and track eaten pellets/energizers."""
+    maze_id = get_maze_id(level)
     # Learn graph connectivity dynamically (just in case)
     new_nodes_discovered = []
     if prev_p is not None:
@@ -980,11 +1023,12 @@ def update_dynamic_graph_and_targets(px, py, prev_p, level, graph, remaining_pel
                 
     # Maze 2+ dynamic pellet discovery
     if level >= 2:
+        blacklist = PELLET_BLACKLIST.get(maze_id, set())
         for node in new_nodes_discovered:
             x, y = node[0], node[1]
             in_house = (75 <= x <= 101) and (72 <= y <= 88)
-            in_tunnel = (72 <= y <= 88) and (x < 25 or x > 140)
-            if not in_house and not in_tunnel and node not in visited_nodes:
+            in_tunnel = is_in_tunnel(x, y, maze_id)
+            if not in_house and not in_tunnel and node not in visited_nodes and node not in blacklist:
                 remaining_pellets.add(node)
                 
     visited_nodes.add((px, py))
@@ -992,10 +1036,11 @@ def update_dynamic_graph_and_targets(px, py, prev_p, level, graph, remaining_pel
     # Auto-connect warp tunnels dynamically
     for node in list(graph.keys()):
         if node[0] <= 20: # left entrance
-            for rx in [158, 157, 156]:
-                if (rx, node[1]) in graph:
-                    graph[node].add((rx, node[1]))
-                    graph[(rx, node[1])].add(node)
+            if is_in_tunnel(node[0], node[1], maze_id):
+                for rx in [158, 157, 156]:
+                    if (rx, node[1]) in graph:
+                        graph[node].add((rx, node[1]))
+                        graph[(rx, node[1])].add(node)
                     
     # Remove nodes close to Pacman from target sets
     for node in list(remaining_pellets):
@@ -1017,7 +1062,7 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
     # Precompute distance maps
     pacman_paths = dijkstra_from_pacman(graph, (px, py))
     
-    blue_timer = int(obs[116])
+    blue_timer = int(obs[116]) & 0x3F
     ghosts_pos = []
     ghosts_in_house = []
     is_blue = []
@@ -1065,7 +1110,7 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
     features.append(np.exp(-0.05 * min_non_blue_dist))
     
     # 16: Blue timer
-    features.append(blue_timer / 255.0)
+    features.append(blue_timer / 63.0)
     
     # 17: Closest remaining pellet distance
     _, pellet_dist, _ = dijkstra_closest_target(pacman_paths, remaining_pellets, (px, py), graph)
@@ -1078,8 +1123,8 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
     # 19: Remaining energizers ratio
     features.append(len(remaining_energizers) / 4.0)
     
-    # 20: Remaining pellets count (RAM 117 based with tanh)
-    features.append(np.tanh(int(obs[117]) / 100.0))
+    # 20: Remaining pellets count (graph-tracked with tanh)
+    features.append(np.tanh(len(remaining_pellets) / 1000.0))
     
     # 21: Lives
     lives = int(obs[123]) & 0x0F
@@ -1124,10 +1169,10 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
     num_blue = sum(1 for b in is_blue if b)
     features.append(num_blue / 4.0)
     
-    # 35-36: Fruit features (obs[14] is fruit X, obs[15] is fruit Y)
-    fx = int(obs[14])
-    fy = int(obs[15])
-    fruit_exists = (fx > 0 and fy > 0 and (fx, fy) != (0, 0))
+    # 35-36: Fruit distance & exists (obs[11]=fruit_x, obs[17]=fruit_y per AtariARI)
+    fx = int(obs[11])
+    fy = int(obs[17])
+    fruit_exists = (fx > 0 and fy > 0)
     if fruit_exists:
         fruit_node = align_coordinates_to_graph(graph, fx, fy)
         if fruit_node in pacman_paths:
@@ -1139,6 +1184,35 @@ def extract_strategic_features(obs, graph, prev_p, remaining_pellets, remaining_
     else:
         features.append(0.0)
         features.append(0.0)
+    
+    # 37-38: Fruit position (normalized); 0 if no fruit
+    features.append(fx / 160.0 if fruit_exists else 0.0)
+    features.append(fy / 160.0 if fruit_exists else 0.0)
+    
+    # 39: Pellet ratio (graph-tracked completion ratio)
+    maze_id = get_maze_id(level)
+    total_pellets = 0
+    remaining_energizers_all = MAZE_ENERGIZERS.get(maze_id, {(18, 14), (18, 146), (158, 14), (158, 146)})
+    blacklist = PELLET_BLACKLIST.get(maze_id, set())
+    for node in graph:
+        x, y = node[0], node[1]
+        in_house = (75 <= x <= 101) and (72 <= y <= 88)
+        in_tunnel = is_in_tunnel(x, y, maze_id)
+        if not in_house and not in_tunnel and (node not in remaining_energizers_all) and (node not in blacklist):
+            total_pellets += 1
+    eaten = max(0, total_pellets - len(remaining_pellets))
+    features.append(min(1.0, eaten / float(max(total_pellets, 1))))
+    
+    # 40: Ghost chase timer state (obs[18] / 255.0)
+    features.append(int(obs[18]) / 255.0)
+    
+    # 41-44: Player direction one-hot (obs[56]: 1=UP, 2=RIGHT, 3=LEFT, 4=DOWN)
+    p_dir = int(obs[56])
+    dir_one_hot = [0.0, 0.0, 0.0, 0.0]
+    dir_map = {1: 0, 2: 1, 4: 2, 3: 3}  # Maps to [UP, RIGHT, DOWN, LEFT]
+    if p_dir in dir_map:
+        dir_one_hot[dir_map[p_dir]] = 1.0
+    features.extend(dir_one_hot)
         
     return np.array(features, dtype=np.float32), (px, py)
 
@@ -1146,9 +1220,9 @@ OPPOSITE_ACTIONS = {1: 4, 2: 3, 3: 2, 4: 1}
 
 def heuristic_execute(strategy_id, obs, graph, remaining_pellets, remaining_energizers, prev_action=0):
     """Translate high level strategy to cardinal action (1-4) or fallback (0)."""
-    px, py = int(obs[10]), int(obs[16])
-    px, py = align_coordinates_to_graph(graph, px, py)
-    blue_timer = int(obs[116])
+    raw_px, raw_py = int(obs[10]), int(obs[16])
+    px, py = align_coordinates_to_graph(graph, raw_px, raw_py)
+    blue_timer = int(obs[116]) & 0x3F
     
     ghosts_pos = []
     ghosts_in_house = []
@@ -1173,8 +1247,16 @@ def heuristic_execute(strategy_id, obs, graph, remaining_pellets, remaining_ener
                 if dist <= 25.0:
                     groups[first_step].append(dist)
         if not groups:
-            _, _, next_node = dijkstra_closest_target(pacman_paths, targets, (px, py), graph)
+            closest_t, dist, next_node = dijkstra_closest_target(pacman_paths, targets, (px, py), graph)
             if next_node is not None:
+                # Lookahead Turn Logic for fallback
+                dist_to_next = abs(raw_px - next_node[0]) + abs(raw_py - next_node[1])
+                if dist_to_next <= 4 and next_node != closest_t:
+                    next_node_paths = dijkstra_from_pacman(graph, next_node)
+                    if closest_t in next_node_paths:
+                        _, n2 = next_node_paths[closest_t]
+                        if n2 is not None:
+                            return get_action_to_neighbor(next_node[0], next_node[1], n2[0], n2[1])
                 return get_action_to_neighbor(px, py, next_node[0], next_node[1])
             return 0
         best_step = None
@@ -1185,6 +1267,19 @@ def heuristic_execute(strategy_id, obs, graph, remaining_pellets, remaining_ener
                 best_score = score
                 best_step = first_step
         if best_step is not None:
+            # Lookahead Turn Logic
+            dist_to_first = abs(raw_px - best_step[0]) + abs(raw_py - best_step[1])
+            if dist_to_first <= 4:
+                # Find the closest target that goes through best_step
+                targets_via_first = [t for t in targets if t in pacman_paths and pacman_paths[t][1] == best_step]
+                if targets_via_first:
+                    closest_t = min(targets_via_first, key=lambda t: pacman_paths[t][0])
+                    if closest_t != best_step:
+                        best_step_paths = dijkstra_from_pacman(graph, best_step)
+                        if closest_t in best_step_paths:
+                            _, n2 = best_step_paths[closest_t]
+                            if n2 is not None:
+                                return get_action_to_neighbor(best_step[0], best_step[1], n2[0], n2[1])
             return get_action_to_neighbor(px, py, best_step[0], best_step[1])
         return 0
 
@@ -1262,9 +1357,9 @@ def heuristic_execute(strategy_id, obs, graph, remaining_pellets, remaining_ener
         return action_to_targets_cluster(remaining_pellets)
 
     elif strategy_id == 5:  # Chase Fruit
-        fx = int(obs[14])
-        fy = int(obs[15])
-        fruit_exists = (fx > 0 and fy > 0 and (fx, fy) != (0, 0))
+        fx = int(obs[11])   # AtariARI: fruit_x = RAM[11]
+        fy = int(obs[17])   # AtariARI: fruit_y = RAM[17]
+        fruit_exists = (fx > 0 and fy > 0)
         if fruit_exists:
             fruit_node = align_coordinates_to_graph(graph, fx, fy)
             _, dist, next_node = dijkstra_closest_target(pacman_paths, {fruit_node}, (px, py), graph)

@@ -89,7 +89,7 @@ class Agent:
         # Decode variables for safety and masks
         px, py = int(observation[10]), int(observation[16])
         px, py = align_coordinates_to_graph(self.graph, px, py)
-        blue_timer = int(observation[116])
+        blue_timer = int(observation[116]) & 0x3F
         
         ghosts_pos = []
         ghosts_in_house = []

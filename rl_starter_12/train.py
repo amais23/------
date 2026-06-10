@@ -75,11 +75,11 @@ class PacmanStrategicWrapper(gym.Wrapper):
         # Action space: 6 macro actions
         self.action_space = gym.spaces.Discrete(6)
         
-        # Observation space: 36 dimensions
+        # Observation space: 44 dimensions (36 strategic + 2 fruit position + 6 RAM optimizations)
         self.observation_space = gym.spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(36,),
+            shape=(44,),
             dtype=np.float32
         )
 
@@ -138,7 +138,7 @@ class PacmanStrategicWrapper(gym.Wrapper):
             
         px, py = int(self.last_raw_obs[10]), int(self.last_raw_obs[16])
         px, py = align_coordinates_to_graph(self.graph, px, py)
-        blue_timer = int(self.last_raw_obs[116])
+        blue_timer = int(self.last_raw_obs[116]) & 0x3F
         
         ghosts_pos = []
         ghosts_in_house = []
@@ -177,10 +177,12 @@ class PacmanStrategicWrapper(gym.Wrapper):
         # 0 ~ 0.5M steps: 12.0
         # 0.5M ~ 1.5M steps: decay linearly from 12.0 to 7.0
         # 1.5M+ steps: lock at 7.0
-        if self.num_steps_total < 500000:
+        decay_start = 500000 // N_ENVS
+        decay_end = 1500000 // N_ENVS
+        if self.num_steps_total < decay_start:
             base_margin = 12.0
-        elif self.num_steps_total < 1500000:
-            frac = (self.num_steps_total - 500000) / 1000000.0
+        elif self.num_steps_total < decay_end:
+            frac = (self.num_steps_total - decay_start) / (decay_end - decay_start)
             base_margin = 12.0 - frac * 5.0
         else:
             base_margin = 7.0
@@ -202,7 +204,7 @@ class PacmanStrategicWrapper(gym.Wrapper):
         
         # Decode current variables from the new observation
         px, py = int(obs[10]), int(obs[16])
-        blue_timer = int(obs[116])
+        blue_timer = int(obs[116]) & 0x3F
         
         ghosts_pos = []
         ghosts_in_house = []
@@ -253,10 +255,12 @@ class PacmanStrategicWrapper(gym.Wrapper):
             
         # 4. Proximity warning (only for non-blue ghosts, one-time cross trigger)
         if blue_timer == 0:
+            aligned_px, aligned_py = align_coordinates_to_graph(self.graph, px, py)
             min_dist = 999.0
             for i in range(4):
                 if not is_blue[i] and not ghosts_in_house[i]:
-                    dist = dijkstra_distance(self.graph, (px, py), ghosts_pos[i])
+                    aligned_gx, aligned_gy = align_coordinates_to_graph(self.graph, ghosts_pos[i][0], ghosts_pos[i][1])
+                    dist = dijkstra_distance(self.graph, (aligned_px, aligned_py), (aligned_gx, aligned_gy))
                     if dist < min_dist:
                         min_dist = dist
             
