@@ -17,6 +17,157 @@ namespace py = pybind11;
 using namespace chess;
 
 // ═══════════════════════════════════════════
+// ML Feature Extractor for Texel's Tuning
+// ═══════════════════════════════════════════
+py::array_t<float> extract_features_from_fen(const std::string& fen) {
+    // 建立 459 維的特徵向量，初始化為 0
+    // [0..4]   : Piece Values (P, N, B, R, Q) -> 5 params
+    // [5..68]  : PST_PAWN -> 64 params
+    // [69..132]: PST_KNIGHT -> 64 params
+    // [133..196]: PST_BISHOP -> 64 params
+    // [197..260]: PST_ROOK -> 64 params
+    // [261..324]: PST_QUEEN -> 64 params
+    // [325..388]: PST_KING_MID -> 64 params
+    // [389..452]: PST_KING_END -> 64 params
+    // [453]    : Bishop Pair -> 1 param
+    // [454]    : King Castled -> 1 param
+    // [455]    : Rook Open File -> 1 param
+    // [456]    : Passed Pawn -> 1 param
+    // [457]    : Doubled Pawn -> 1 param
+    // [458]    : Isolated Pawn -> 1 param
+    
+    auto result = py::array_t<float>(459);
+    py::buffer_info buf = result.request();
+    float* ptr = static_cast<float*>(buf.ptr);
+    std::fill(ptr, ptr + 459, 0.0f);
+
+    Board board;
+    try {
+        board = Board(fen);
+    } catch (...) {
+        return result; // 解析失敗回傳全 0
+    }
+
+    // 計算 Game Phase (為了 King 的 Tapered Eval)
+    int knight_count = board.pieces(PieceType::KNIGHT, Color::WHITE).count() +
+                       board.pieces(PieceType::KNIGHT, Color::BLACK).count();
+    int bishop_count = board.pieces(PieceType::BISHOP, Color::WHITE).count() +
+                       board.pieces(PieceType::BISHOP, Color::BLACK).count();
+    int rook_count = board.pieces(PieceType::ROOK, Color::WHITE).count() +
+                     board.pieces(PieceType::ROOK, Color::BLACK).count();
+    int queen_count = board.pieces(PieceType::QUEEN, Color::WHITE).count() +
+                      board.pieces(PieceType::QUEEN, Color::BLACK).count();
+
+    int phase = knight_count + bishop_count + (rook_count * 2) + (queen_count * 4);
+    phase = std::min(phase, 24);
+    float w_phase = phase / 24.0f;
+    float w_opp_phase = (24 - phase) / 24.0f;
+
+    // 1. 棋子基礎價值與 PST 特徵
+    for (int pt_idx = 0; pt_idx < 6; pt_idx++) {
+        PieceType pt = static_cast<PieceType::underlying>(pt_idx);
+
+        // 白方 (加分)
+        Bitboard bb_w = board.pieces(pt, Color::WHITE);
+        // 黑方 (扣分)
+        Bitboard bb_b = board.pieces(pt, Color::BLACK);
+
+        while (bb_w) {
+            Square sq = bb_w.pop();
+            int idx_w = sq.index() ^ 56; // 翻轉到白方視角的索引
+
+            if (pt != PieceType::KING) {
+                ptr[pt_idx] += 1.0f; // 基礎價值 (P, N, B, R, Q 對應 0~4)
+                ptr[5 + pt_idx * 64 + idx_w] += 1.0f; // PST
+            } else {
+                ptr[325 + idx_w] += w_phase;      // King Mid
+                ptr[389 + idx_w] += w_opp_phase;  // King End
+            }
+        }
+
+        while (bb_b) {
+            Square sq = bb_b.pop();
+            int idx_b = sq.index(); // 黑方不需要翻轉
+
+            if (pt != PieceType::KING) {
+                ptr[pt_idx] -= 1.0f;
+                ptr[5 + pt_idx * 64 + idx_b] -= 1.0f;
+            } else {
+                ptr[325 + idx_b] -= w_phase;
+                ptr[389 + idx_b] -= w_opp_phase;
+            }
+        }
+    }
+
+    // 2. 特殊加分項特徵
+    // 雙象 (453)
+    if (board.pieces(PieceType::BISHOP, Color::WHITE).count() == 2) ptr[453] += 1.0f;
+    if (board.pieces(PieceType::BISHOP, Color::BLACK).count() == 2) ptr[453] -= 1.0f;
+
+    // 王城安全度 (454)
+    Square ksq_w = board.kingSq(Color::WHITE);
+    if (ksq_w == Square("c1") || ksq_w == Square("g1") || ksq_w == Square("b1")) ptr[454] += 1.0f;
+    Square ksq_b = board.kingSq(Color::BLACK);
+    if (ksq_b == Square("c8") || ksq_b == Square("g8") || ksq_b == Square("b8")) ptr[454] -= 1.0f;
+
+    // 開放線車 (455)
+    uint64_t pawns_w_bits = board.pieces(PieceType::PAWN, Color::WHITE).getBits();
+    uint64_t pawns_b_bits = board.pieces(PieceType::PAWN, Color::BLACK).getBits();
+
+    Bitboard rooks_w = board.pieces(PieceType::ROOK, Color::WHITE);
+    while (rooks_w) {
+        int f = rooks_w.pop() % 8;
+        if (!(pawns_w_bits & (0x0101010101010101ULL << f))) ptr[455] += 1.0f;
+    }
+    Bitboard rooks_b = board.pieces(PieceType::ROOK, Color::BLACK);
+    while (rooks_b) {
+        int f = rooks_b.pop() % 8;
+        if (!(pawns_b_bits & (0x0101010101010101ULL << f))) ptr[455] -= 1.0f;
+    }
+
+    // 兵型特徵
+    // 預先產生 Passed Pawn Masks 的簡易邏輯 (因為 SearchEngine 的是 private，這裡快取一下)
+    for (int sq = 0; sq < 64; sq++) {
+        int f = sq % 8;
+        int r = sq / 8;
+        
+        // 通路兵 (456)
+        if (board.pieces(PieceType::PAWN, Color::WHITE) & (1ULL << sq)) {
+            uint64_t b_mask = 0;
+            for (int cf = std::max(0, f - 1); cf <= std::min(7, f + 1); cf++)
+                for (int cr = r + 1; cr < 8; cr++) b_mask |= (1ULL << (cr * 8 + cf));
+            if (!(pawns_b_bits & b_mask)) ptr[456] += static_cast<float>(r);
+        }
+        if (board.pieces(PieceType::PAWN, Color::BLACK) & (1ULL << sq)) {
+            uint64_t w_mask = 0;
+            for (int cf = std::max(0, f - 1); cf <= std::min(7, f + 1); cf++)
+                for (int cr = 0; cr < r; cr++) w_mask |= (1ULL << (cr * 8 + cf));
+            if (!(pawns_w_bits & w_mask)) ptr[456] -= static_cast<float>(7 - r);
+        }
+    }
+
+    for (int f = 0; f < 8; f++) {
+        uint64_t file_mask = 0x0101010101010101ULL << f;
+        uint64_t adj_mask = 0;
+        if (f > 0) adj_mask |= (0x0101010101010101ULL << (f - 1));
+        if (f < 7) adj_mask |= (0x0101010101010101ULL << (f + 1));
+
+        // 疊兵 (457)
+        int count_w = (pawns_w_bits & file_mask) ? Bitboard(pawns_w_bits & file_mask).count() : 0;
+        if (count_w > 1) ptr[457] += (count_w - 1);
+        int count_b = (pawns_b_bits & file_mask) ? Bitboard(pawns_b_bits & file_mask).count() : 0;
+        if (count_b > 1) ptr[457] -= (count_b - 1);
+
+        // 孤兵 (458)
+        if ((pawns_w_bits & file_mask) && !(pawns_w_bits & adj_mask)) ptr[458] += 1.0f;
+        if ((pawns_b_bits & file_mask) && !(pawns_b_bits & adj_mask)) ptr[458] -= 1.0f;
+    }
+
+    return result;
+}
+
+
+// ═══════════════════════════════════════════
 // Polyglot Random Array (781 entries)
 // ═══════════════════════════════════════════
 static constexpr uint64_t POLYGLOT_RANDOM_ARRAY[781] = {
@@ -303,53 +454,49 @@ static constexpr size_t TT_MASK = TT_SIZE - 1;
 // Piece-Square Tables (PST) and Piece Values
 // ═══════════════════════════════════════════
 // Added 7th element (0) to handle PieceType::NONE safely (BUG-4)
-static constexpr int PIECE_VAL[7] = {100, 320, 330, 500, 900, 20000, 0};
+static constexpr int PIECE_VAL[7] = {104, 469, 472, 980, 2301, 20000, 0};
 
 static constexpr int16_t PST_PAWN[64] = {
-    0,  0,  0,  0,   0,   0,  0,  0,  50, 50, 50,  50, 50, 50,  50, 50,
-    10, 10, 20, 30,  30,  20, 10, 10, 5,  5,  10,  25, 25, 10,  5,  5,
-    0,  0,  0,  20,  20,  0,  0,  0,  5,  -5, -10, 0,  0,  -10, -5, 5,
-    5,  10, 10, -20, -20, 10, 10, 5,  0,  0,  0,   0,  0,  0,   0,  0};
+    0, 0, 0, 0, 0, 0, 0, 0, 186, 194, 238, 257, 117, 300, 15, 110,
+    86, 147, 163, 36, 0, 19, 233, 29, -19, -54, -66, -73, -89, -20, 13, -26,
+    -81, -105, -88, -109, -106, -93, -42, -129, -164, -58, -95, -113, -139, -91, -52, -119,
+    -196, -107, -121, -140, -149, -121, -84, -179, 0, 0, 0, 0, 0, 0, 0, 0};
 
 static constexpr int16_t PST_KNIGHT[64] = {
-    -50, -40, -30, -30, -30, -30, -40, -50, -40, -20, 0,   0,   0,
-    0,   -20, -40, -30, 0,   10,  15,  15,  10,  0,   -30, -30, 5,
-    15,  20,  20,  15,  5,   -30, -30, 0,   15,  20,  20,  15,  0,
-    -30, -30, 5,   10,  15,  15,  10,  5,   -30, -40, -20, 0,   5,
-    5,   0,   -20, -40, -50, -40, -30, -30, -30, -30, -40, -50};
+    -664, -294, -325, -501, -343, -345, -264, -596, -279, -434, -337, -322, -212, -286, -352, -355,
+    -342, -293, -306, -302, -305, -257, -219, -343, -304, -349, -326, -290, -301, -236, -294, -235,
+    -390, -359, -315, -336, -349, -288, -253, -370, -382, -381, -368, -322, -307, -355, -314, -312,
+    -397, -493, -395, -365, -370, -428, -347, -401, -378, -398, -522, -402, -364, -432, -386, -311};
 
 static constexpr int16_t PST_BISHOP[64] = {
-    -20, -10, -10, -10, -10, -10, -10, -20, -10, 0,   0,   0,   0,
-    0,   0,   -10, -10, 0,   10,  10,  10,  10,  0,   -10, -10, 5,
-    5,   10,  10,  5,   5,   -10, -10, 0,   5,   10,  10,  5,   0,
-    -10, -10, 10,  10,  10,  10,  10,  10,  -10, -10, 5,   0,   0,
-    0,   0,   5,   -10, -20, -10, -10, -10, -10, -10, -10, -20};
+    -534, -357, -433, -505, -148, -504, -312, -607, -202, -169, -190, -412, -441, -199, -262, -279,
+    -252, -216, -326, -256, -217, -313, -96, -193, -311, -243, -233, -209, -212, -209, -272, -183,
+    -243, -238, -251, -201, -226, -236, -310, -226, -272, -207, -245, -270, -227, -266, -195, -264,
+    -219, -295, -196, -261, -284, -271, -291, -145, -321, -233, -286, -292, -263, -318, -29, -286};
 
 static constexpr int16_t PST_ROOK[64] = {
-    0,  0, 0, 0, 0, 0, 0, 0,  5,  10, 10, 10, 10, 10, 10, 5,
-    -5, 0, 0, 0, 0, 0, 0, -5, -5, 0,  0,  0,  0,  0,  0,  -5,
-    -5, 0, 0, 0, 0, 0, 0, -5, -5, 0,  0,  0,  0,  0,  0,  -5,
-    -5, 0, 0, 0, 0, 0, 0, -5, 0,  0,  0,  5,  5,  0,  0,  0};
+    -355, -322, -384, -515, -605, -466, -379, -342, -337, -373, -356, -368, -402, -374, -263, -419,
+    -347, -378, -259, -340, -247, -363, -376, -313, -468, -306, -330, -329, -351, -337, -298, -497,
+    -471, -395, -343, -296, -403, -419, -494, -389, -511, -427, -423, -362, -425, -425, -392, -462,
+    -552, -555, -454, -411, -419, -508, -485, -561, -614, -546, -481, -491, -483, -568, -549, -617};
 
 static constexpr int16_t PST_QUEEN[64] = {
-    -20, -10, -10, -5, -5, -10, -10, -20, -10, 0,   0,   0,  0,  0,   0,   -10,
-    -10, 0,   5,   5,  5,  5,   0,   -10, -5,  0,   5,   5,  5,  5,   0,   -5,
-    0,   0,   5,   5,  5,  5,   0,   -5,  -10, 5,   5,   5,  5,  5,   0,   -10,
-    -10, 0,   5,   0,  0,  0,   0,   -10, -20, -10, -10, -5, -5, -10, -10, -20};
+    -792, -658, -709, -926, -646, -587, -663, -686, -501, -598, -518, -692, -677, -561, -493, -510,
+    -518, -589, -575, -401, -582, -584, -377, -377, -464, -561, -497, -577, -529, -431, -468, -460,
+    -561, -519, -568, -558, -524, -480, -554, -465, -456, -581, -540, -534, -472, -541, -493, -466,
+    -583, -525, -570, -540, -558, -476, -546, -405, -395, -535, -587, -585, -569, -567, -392, -291};
 
 static constexpr int16_t PST_KING_MID[64] = {
-    -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50,
-    -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40,
-    -40, -50, -50, -40, -40, -30, -20, -30, -30, -40, -40, -30, -30,
-    -20, -10, -20, -20, -20, -20, -20, -20, -10, 20,  20,  0,   0,
-    0,   0,   20,  20,  20,  30,  10,  0,   0,   10,  30,  20};
+    133, 352, 275, 238, 350, 58, 151, 102, 75, 528, 375, 119, 240, 308, 307, 201,
+    140, 386, 262, 252, 303, 242, 177, 296, 173, 322, 200, 325, 183, 149, 312, 197,
+    375, 200, 100, 179, 189, 141, -161, -20, -102, 62, 102, 80, -21, -94, -139, -325,
+    -28, -261, 83, -50, -67, -254, -167, -282, 9, 207, 72, 64, -75, -132, 101, -52};
 
 static constexpr int16_t PST_KING_END[64] = {
-    -50, -40, -30, -20, -20, -30, -40, -50, -30, -20, -10, 0,   0,
-    -10, -20, -30, -30, -10, 20,  30,  30,  20,  -10, -30, -30, -10,
-    30,  40,  40,  30,  -10, -30, -30, -10, 30,  40,  40,  30,  -10,
-    -30, -30, -10, 20,  30,  30,  20,  -10, -30, -30, -30, 0,   0,
-    0,   0,   -30, -30, -50, -30, -30, -30, -30, -30, -30, -50};
+    289, 322, 258, 218, 317, 109, 72, 120, 269, 525, 346, 291, 251, 247, 354, 38,
+    302, 308, 263, 223, 205, 202, 156, 322, 166, 333, 115, 206, 121, 143, 79, 106,
+    412, 246, 145, 124, 33, 124, 33, 98, 64, 98, 149, 24, 7, -70, 15, -75,
+    312, 87, 8, -92, -115, -92, -46, -93, -175, 210, -248, -121, -427, -187, -277, -356};
 
 static const int16_t *PIECE_PST[6] = {PST_PAWN, PST_KNIGHT, PST_BISHOP,
                                       PST_ROOK, PST_QUEEN,  PST_KING_MID};
@@ -1049,18 +1196,18 @@ public:
 
     // Bishop Pair
     if (board.pieces(PieceType::BISHOP, Color::WHITE).count() == 2)
-      score += 50;
+      score += -86;
     if (board.pieces(PieceType::BISHOP, Color::BLACK).count() == 2)
-      score -= 50;
+      score -= -86;
 
     // King Castled
     Square ksq_w = board.kingSq(Color::WHITE);
     if (ksq_w == Square("c1") || ksq_w == Square("g1") || ksq_w == Square("b1"))
-      score += 30;
+      score += -157;
 
     Square ksq_b = board.kingSq(Color::BLACK);
     if (ksq_b == Square("c8") || ksq_b == Square("g8") || ksq_b == Square("b8"))
-      score -= 30;
+      score -= -157;
 
     // Rooks on Open/Half-Open Files
     Bitboard rooks_w = board.pieces(PieceType::ROOK, Color::WHITE);
@@ -1069,7 +1216,7 @@ public:
       int f = sq.index() % 8;
       uint64_t file_mask = 0x0101010101010101ULL << f;
       if (!(board.pieces(PieceType::PAWN, Color::WHITE).getBits() & file_mask)) {
-        score += 20;
+        score += -62;
       }
     }
 
@@ -1079,7 +1226,7 @@ public:
       int f = sq.index() % 8;
       uint64_t file_mask = 0x0101010101010101ULL << f;
       if (!(board.pieces(PieceType::PAWN, Color::BLACK).getBits() & file_mask)) {
-        score -= 20;
+        score -= -62;
       }
     }
 
@@ -1091,7 +1238,7 @@ public:
     while (pawns_w) {
       Square sq = pawns_w.pop();
       if (!(pawns_b_bits_v & m_passed_pawn_masks[0][sq.index()])) {
-        score += 10 * (sq.index() / 8);
+        score += 26 * (sq.index() / 8);
       }
     }
 
@@ -1099,7 +1246,7 @@ public:
     while (pawns_b_bb) {
       Square sq = pawns_b_bb.pop();
       if (!(pawns_w_bits_v & m_passed_pawn_masks[1][sq.index()])) {
-        score -= 10 * (7 - (sq.index() / 8));
+        score -= 26 * (7 - (sq.index() / 8));
       }
     }
 
@@ -1113,19 +1260,19 @@ public:
       // Doubled pawns
       int count_w = (pawns_w_bits_v & file_mask) ? Bitboard(pawns_w_bits_v & file_mask).count() : 0;
       if (count_w > 1) {
-        score -= 10 * (count_w - 1);
+        score += -11 * (count_w - 1);
       }
       int count_b = (pawns_b_bits_v & file_mask) ? Bitboard(pawns_b_bits_v & file_mask).count() : 0;
       if (count_b > 1) {
-        score += 10 * (count_b - 1);
+        score -= -11 * (count_b - 1);
       }
 
       // Isolated pawns
       if ((pawns_w_bits_v & file_mask) && !(pawns_w_bits_v & adj_mask)) {
-        score -= 15;
+        score += -33;
       }
       if ((pawns_b_bits_v & file_mask) && !(pawns_b_bits_v & adj_mask)) {
-        score += 15;
+        score -= -33;
       }
     }
 
@@ -1576,8 +1723,8 @@ int test_move_to_action(const std::string &fen, const std::string &uci_str) {
   }
 }
 
-PYBIND11_MODULE(chess_engine_d6_han, m) {
-  m.doc() = "D6 C++ Chess Engine Module (Thread-Safe Instance Version)";
+PYBIND11_MODULE(chess_engine_d7_han, m) {
+  m.doc() = "D7 C++ Chess Engine Module (Thread-Safe Instance Version)";
 
   py::class_<SearchEngine>(m, "SearchEngine")
       .def(py::init<>())
@@ -1588,4 +1735,5 @@ PYBIND11_MODULE(chess_engine_d6_han, m) {
 
   m.def("test_move_to_action", &test_move_to_action, "Test move encoding");
   m.def("test_book_info", &test_book_info, "Test book hashing and probing");
+  m.def("extract_features", &extract_features_from_fen, "Extract 459D evaluation features from FEN");
 }

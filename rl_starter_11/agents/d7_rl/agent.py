@@ -1,5 +1,5 @@
 """
-D6 C++ Engine — Python Bootloader
+D7 C++ Engine — Python Bootloader
 PID 隔離解壓 + Python 端 Syzygy 殘局庫探測
 """
 import os
@@ -33,8 +33,8 @@ def _bootstrap():
 
     sys.path.insert(0, base_dir)
     try:
-        import chess_engine_d6_han
-        _ENGINE_MODULE = chess_engine_d6_han
+        import chess_engine_d7_han
+        _ENGINE_MODULE = chess_engine_d7_han
         
     except ImportError:
         # [MAGIC ZIP LOADER]
@@ -48,11 +48,11 @@ def _bootstrap():
         
         try:
             # 直接對 zip 檔使用 C 擴充載入器，這會透過 dlopen(model.zip) 直接在唯讀環境中載入！
-            loader = importlib.machinery.ExtensionFileLoader("chess_engine_d6_han", os.path.abspath(zip_path))
-            spec = importlib.util.spec_from_loader("chess_engine_d6_han", loader)
-            chess_engine_d6_han = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(chess_engine_d6_han)
-            _ENGINE_MODULE = chess_engine_d6_han
+            loader = importlib.machinery.ExtensionFileLoader("chess_engine_d7_han", os.path.abspath(zip_path))
+            spec = importlib.util.spec_from_loader("chess_engine_d7_han", loader)
+            chess_engine_d7_han = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(chess_engine_d7_han)
+            _ENGINE_MODULE = chess_engine_d7_han
             
         except Exception as e:
             raise RuntimeError(f"魔法載入失敗！無法載入 C++ 引擎: {e}\nzip_path={zip_path}")

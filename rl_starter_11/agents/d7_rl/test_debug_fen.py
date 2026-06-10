@@ -1,3 +1,4 @@
+import chess_engine_d7_han
 import numpy as np
 
 def make_starting_obs():

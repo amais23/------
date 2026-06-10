@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import chess_engine_d6_han
+import chess_engine_d7_han
 
 def make_starting_obs():
     """建立標準初始局面的 observation (8,8,111)"""
@@ -131,7 +131,7 @@ mask = np.ones(4672, dtype=np.int8)
 
 def run_stress(thread_id, num_calls=30):
     """壓力測試：重複呼叫 solve() 觸發超時"""
-    engine = chess_engine_d6_han.SearchEngine()
+    engine = chess_engine_d7_han.SearchEngine()
     engine.init("")
     
     errors = []
