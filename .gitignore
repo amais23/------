@@ -8,3 +8,6 @@ rl_starter_11/syzygy
 rl_starter_12/.venv
 
 .DS_Store
+
+rl_starter_11/model.zip
+rl_starter_11/agents/d7_rl/FEN_data/chess_analysis.db
