@@ -13,8 +13,8 @@ from torch.utils.data import Dataset, DataLoader
 # ═══════════════════════════════════════════
 # 系統與訓練超參數配置
 # ═══════════════════════════════════════════
-NUM_CORES = 4              # M4 具備 4 個高效能核心，設為 4 可讓這 4 個核心滿載高速運行，並空出 6 個節能核心處理背景進程與 IDE
-GAMES_PER_CORE = 25        # 4 核心每核 25 局對局，每代共約 100 盤
+NUM_CORES = 10             # 使用全部 10 核心（4 效能 + 6 節能）加速自對弈；每代共 250 局，約是 4 核心的 2.5 倍資料量
+GAMES_PER_CORE = 10        # 10 核心每核 10 局，每代共 100 盤，與原 4 核心版本資料量相同但速度快 2.5 倍
 GENERATIONS = 4            # 總共進化 4 代
 MAX_MOVES_PER_GAME = 120   # 避免無限期對局
 SCALE_FACTOR = 4.028981    # 權重放大基準
@@ -346,11 +346,17 @@ def update_cpp_and_recompile(raw_weights):
         content
     )
 
-    # King Castled
-    castled_regex = r"(Square ksq_w = board\.kingSq\(Color::WHITE\);\s*if \(ksq_w == Square\(\"c1\"\) \|\| ksq_w == Square\(\"g1\"\) \|\| ksq_w == Square\(\"b1\"\)\)\s*score \+=\s*)[-]?\d+;(\s*Square ksq_b = board\.kingSq\(Color::BLACK\);\s*if \(ksq_b == Square\(\"c8\"\) \|\| ksq_b == Square\(\"g8\"\) \|\| ksq_b == Square\(\"b8\"\)\)\s*score -=\s*)[-]?\d+;"
+    # King Castled — 分兩步替換，避免在 rf-string 裡嵌套反斜線引號導致 C++ 語法錯誤
+    # Step 1: 替換白王分數
     content = re.sub(
-        castled_regex,
-        rf"\g<1>{kc_val};\n\n    Square ksq_b = board.kingSq(Color::BLACK);\n    if (ksq_b == Square(\"c8\") || ksq_b == Square(\"g8\") || ksq_b == Square(\"b8\"))\n      score -= {kc_val};",
+        r"(Square ksq_w = board\.kingSq\(Color::WHITE\);\s*if \(ksq_w == Square\(\"c1\"\) \|\| ksq_w == Square\(\"g1\"\) \|\| ksq_w == Square\(\"b1\"\)\)\s*score \+=\s*)[-]?\d+;",
+        lambda m: m.group(1) + f"{kc_val};",
+        content
+    )
+    # Step 2: 替換黑王分數
+    content = re.sub(
+        r"(Square ksq_b = board\.kingSq\(Color::BLACK\);\s*if \(ksq_b == Square\(\"c8\"\) \|\| ksq_b == Square\(\"g8\"\) \|\| ksq_b == Square\(\"b8\"\)\)\s*score -=\s*)[-]?\d+;",
+        lambda m: m.group(1) + f"{kc_val};",
         content
     )
 
@@ -428,19 +434,25 @@ if __name__ == "__main__":
     # 確保 FEN_data 目錄存在
     os.makedirs("FEN_data", exist_ok=True)
     
-    # 載入當前 engine.cpp 的權重作為基礎起點
-    if os.path.exists("FEN_data/optimized_weights.npy"):
+    # 優先載入 Gen 1 已儲存的 RL 權重，否則從預訓練基準起點開始
+    if os.path.exists("FEN_data/latest_rl_weights.npy"):
+        current_weights = np.load("FEN_data/latest_rl_weights.npy")
+        start_gen = 2  # Gen 1 已完成自對弈與訓練，從 Gen 2 繼續
+        print("載入 latest_rl_weights.npy（Gen 1 完成），從第 2 代繼續 RL 微調。")
+    elif os.path.exists("FEN_data/optimized_weights.npy"):
         current_weights = np.load("FEN_data/optimized_weights.npy")
+        start_gen = 1
         print("載入 optimized_weights.npy 作為 RL 微調起點。")
     else:
         # 兜底隨機初始化
         current_weights = np.zeros(459, dtype=np.float32)
         current_weights[0:5] = [100.0, 320.0, 330.0, 500.0, 900.0]
         current_weights /= SCALE_FACTOR
+        start_gen = 1
 
     replay_buffer = []
 
-    for gen in range(1, GENERATIONS + 1):
+    for gen in range(start_gen, GENERATIONS + 1):
         print(f"\n{'='*60}\n🚀 啟動 RL 自我對弈與進化管線 - 第 {gen} 代 / 共 {GENERATIONS} 代\n{'='*60}")
         
         # Phase 1: Self-Play (多進程)

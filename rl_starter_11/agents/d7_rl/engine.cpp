@@ -454,49 +454,49 @@ static constexpr size_t TT_MASK = TT_SIZE - 1;
 // Piece-Square Tables (PST) and Piece Values
 // ═══════════════════════════════════════════
 // Added 7th element (0) to handle PieceType::NONE safely (BUG-4)
-static constexpr int PIECE_VAL[7] = {104, 469, 472, 980, 2301, 20000, 0};
+static constexpr int PIECE_VAL[7] = {116, 481, 484, 991, 2313, 20000, 0};
 
 static constexpr int16_t PST_PAWN[64] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 186, 194, 238, 257, 117, 300, 15, 110,
-    86, 147, 163, 36, 0, 19, 233, 29, -19, -54, -66, -73, -89, -20, 13, -26,
-    -81, -105, -88, -109, -106, -93, -42, -129, -164, -58, -95, -113, -139, -91, -52, -119,
-    -196, -107, -121, -140, -149, -121, -84, -179, 0, 0, 0, 0, 0, 0, 0, 0};
+    0, 0, 0, 0, 0, 0, 0, 0, 186, 205, 249, 267, 125, 310, 26, 120,
+    97, 141, 172, 46, 1, 28, 244, 19, -13, -44, -75, -61, -100, -8, 20, -21,
+    -72, -100, -100, -98, -96, -82, -36, -124, -164, -48, -87, -123, -128, -102, -41, -120,
+    -207, -102, -113, -128, -160, -114, -82, -168, 0, 0, 0, 0, 0, 0, 0, 0};
 
 static constexpr int16_t PST_KNIGHT[64] = {
-    -664, -294, -325, -501, -343, -345, -264, -596, -279, -434, -337, -322, -212, -286, -352, -355,
-    -342, -293, -306, -302, -305, -257, -219, -343, -304, -349, -326, -290, -301, -236, -294, -235,
-    -390, -359, -315, -336, -349, -288, -253, -370, -382, -381, -368, -322, -307, -355, -314, -312,
-    -397, -493, -395, -365, -370, -428, -347, -401, -378, -398, -522, -402, -364, -432, -386, -311};
+    -670, -284, -314, -507, -350, -341, -253, -606, -290, -439, -330, -312, -201, -276, -359, -344,
+    -349, -283, -294, -292, -294, -247, -213, -334, -302, -339, -335, -279, -304, -230, -304, -236,
+    -394, -365, -321, -327, -347, -278, -258, -368, -391, -370, -362, -310, -298, -352, -311, -311,
+    -407, -503, -402, -354, -360, -432, -339, -402, -378, -398, -528, -406, -368, -442, -383, -306};
 
 static constexpr int16_t PST_BISHOP[64] = {
-    -534, -357, -433, -505, -148, -504, -312, -607, -202, -169, -190, -412, -441, -199, -262, -279,
-    -252, -216, -326, -256, -217, -313, -96, -193, -311, -243, -233, -209, -212, -209, -272, -183,
-    -243, -238, -251, -201, -226, -236, -310, -226, -272, -207, -245, -270, -227, -266, -195, -264,
-    -219, -295, -196, -261, -284, -271, -291, -145, -321, -233, -286, -292, -263, -318, -29, -286};
+    -524, -356, -425, -498, -144, -497, -300, -611, -195, -157, -189, -403, -431, -190, -265, -287,
+    -253, -206, -315, -248, -207, -304, -107, -187, -302, -240, -222, -197, -201, -198, -261, -180,
+    -233, -228, -239, -189, -220, -242, -299, -215, -263, -213, -240, -269, -217, -258, -186, -253,
+    -208, -284, -196, -259, -273, -260, -299, -156, -314, -222, -275, -300, -271, -316, -40, -280};
 
 static constexpr int16_t PST_ROOK[64] = {
-    -355, -322, -384, -515, -605, -466, -379, -342, -337, -373, -356, -368, -402, -374, -263, -419,
-    -347, -378, -259, -340, -247, -363, -376, -313, -468, -306, -330, -329, -351, -337, -298, -497,
-    -471, -395, -343, -296, -403, -419, -494, -389, -511, -427, -423, -362, -425, -425, -392, -462,
-    -552, -555, -454, -411, -419, -508, -485, -561, -614, -546, -481, -491, -483, -568, -549, -617};
+    -353, -331, -384, -509, -601, -461, -374, -333, -334, -371, -351, -357, -394, -381, -252, -428,
+    -336, -370, -257, -337, -255, -356, -366, -318, -457, -305, -321, -338, -346, -344, -307, -489,
+    -466, -392, -341, -288, -392, -409, -483, -397, -509, -415, -429, -374, -417, -435, -399, -464,
+    -560, -566, -466, -423, -430, -512, -495, -567, -604, -540, -487, -485, -487, -579, -538, -606};
 
 static constexpr int16_t PST_QUEEN[64] = {
-    -792, -658, -709, -926, -646, -587, -663, -686, -501, -598, -518, -692, -677, -561, -493, -510,
-    -518, -589, -575, -401, -582, -584, -377, -377, -464, -561, -497, -577, -529, -431, -468, -460,
-    -561, -519, -568, -558, -524, -480, -554, -465, -456, -581, -540, -534, -472, -541, -493, -466,
-    -583, -525, -570, -540, -558, -476, -546, -405, -395, -535, -587, -585, -569, -567, -392, -291};
+    -782, -651, -698, -918, -638, -576, -653, -679, -502, -587, -511, -681, -667, -550, -482, -501,
+    -518, -579, -564, -390, -571, -574, -381, -375, -455, -551, -497, -566, -518, -422, -457, -450,
+    -552, -512, -576, -555, -516, -477, -543, -465, -447, -574, -543, -537, -478, -532, -491, -463,
+    -590, -528, -569, -532, -559, -488, -556, -411, -406, -540, -591, -595, -571, -561, -397, -286};
 
 static constexpr int16_t PST_KING_MID[64] = {
-    133, 352, 275, 238, 350, 58, 151, 102, 75, 528, 375, 119, 240, 308, 307, 201,
-    140, 386, 262, 252, 303, 242, 177, 296, 173, 322, 200, 325, 183, 149, 312, 197,
-    375, 200, 100, 179, 189, 141, -161, -20, -102, 62, 102, 80, -21, -94, -139, -325,
-    -28, -261, 83, -50, -67, -254, -167, -282, 9, 207, 72, 64, -75, -132, 101, -52};
+    141, 361, 282, 239, 345, 55, 151, 98, 85, 526, 382, 113, 243, 315, 317, 192,
+    142, 398, 267, 248, 296, 251, 169, 286, 164, 317, 198, 328, 175, 150, 304, 191,
+    369, 199, 98, 185, 198, 131, -156, -15, -114, 51, 97, 72, -30, -101, -143, -315,
+    -38, -272, 78, -61, -77, -249, -165, -290, 5, 196, 66, 75, -64, -134, 91, -62};
 
 static constexpr int16_t PST_KING_END[64] = {
-    289, 322, 258, 218, 317, 109, 72, 120, 269, 525, 346, 291, 251, 247, 354, 38,
-    302, 308, 263, 223, 205, 202, 156, 322, 166, 333, 115, 206, 121, 143, 79, 106,
-    412, 246, 145, 124, 33, 124, 33, 98, 64, 98, 149, 24, 7, -70, 15, -75,
-    312, 87, 8, -92, -115, -92, -46, -93, -175, 210, -248, -121, -427, -187, -277, -356};
+    297, 331, 267, 224, 309, 107, 74, 114, 280, 523, 353, 286, 257, 254, 361, 29,
+    302, 320, 271, 228, 207, 212, 148, 312, 164, 328, 124, 203, 114, 147, 70, 99,
+    411, 248, 147, 131, 44, 121, 40, 99, 52, 89, 151, 19, 5, -75, 6, -71,
+    301, 75, 16, -86, -112, -84, -44, -93, -181, 198, -257, -109, -418, -183, -288, -366};
 
 static const int16_t *PIECE_PST[6] = {PST_PAWN, PST_KNIGHT, PST_BISHOP,
                                       PST_ROOK, PST_QUEEN,  PST_KING_MID};
@@ -660,20 +660,13 @@ inline std::string rebuild_fen_from_observation(py::array_t<int8_t> obs_arr) {
     }
   }
 
-  // Castling rights
-  std::string castling_str = "";
-  if (obs(0, 0, 0))
-    castling_str += "K";
-  if (obs(0, 0, 1))
-    castling_str += "Q";
-  if (obs(0, 0, 2))
-    castling_str += "k";
-  if (obs(0, 0, 3))
-    castling_str += "q";
-  if (castling_str.empty())
-    castling_str = "-";
-
-  return placement + " w " + castling_str + " " + ep_str + " 0 1";
+  // NOTE: Castling rights are intentionally set to "-" here.
+  // setFenCommon() calls kingSq(BLACK) during castling-path init for every side
+  // that has castling rights.  If the FEN reconstruction ever omits the black
+  // king (e.g. due to an EP-pawn overwrite or channel misalignment), that call
+  // triggers std::abort().  The engine only needs legal moves for self-play
+  // search, so dropping castling rights is safe and eliminates the crash.
+  return placement + " w - " + ep_str + " 0 1";
 }
 
 // -----------------------------------------------
@@ -1196,18 +1189,18 @@ public:
 
     // Bishop Pair
     if (board.pieces(PieceType::BISHOP, Color::WHITE).count() == 2)
-      score += -86;
+      score += -74;
     if (board.pieces(PieceType::BISHOP, Color::BLACK).count() == 2)
-      score -= -86;
+      score -= -74;
 
     // King Castled
     Square ksq_w = board.kingSq(Color::WHITE);
     if (ksq_w == Square("c1") || ksq_w == Square("g1") || ksq_w == Square("b1"))
-      score += -157;
+      score += -169;
 
     Square ksq_b = board.kingSq(Color::BLACK);
     if (ksq_b == Square("c8") || ksq_b == Square("g8") || ksq_b == Square("b8"))
-      score -= -157;
+      score -= -169;
 
     // Rooks on Open/Half-Open Files
     Bitboard rooks_w = board.pieces(PieceType::ROOK, Color::WHITE);
@@ -1216,7 +1209,7 @@ public:
       int f = sq.index() % 8;
       uint64_t file_mask = 0x0101010101010101ULL << f;
       if (!(board.pieces(PieceType::PAWN, Color::WHITE).getBits() & file_mask)) {
-        score += -62;
+        score += -68;
       }
     }
 
@@ -1226,7 +1219,7 @@ public:
       int f = sq.index() % 8;
       uint64_t file_mask = 0x0101010101010101ULL << f;
       if (!(board.pieces(PieceType::PAWN, Color::BLACK).getBits() & file_mask)) {
-        score -= -62;
+        score -= -68;
       }
     }
 
@@ -1238,7 +1231,7 @@ public:
     while (pawns_w) {
       Square sq = pawns_w.pop();
       if (!(pawns_b_bits_v & m_passed_pawn_masks[0][sq.index()])) {
-        score += 26 * (sq.index() / 8);
+        score += 38 * (sq.index() / 8);
       }
     }
 
@@ -1246,7 +1239,7 @@ public:
     while (pawns_b_bb) {
       Square sq = pawns_b_bb.pop();
       if (!(pawns_w_bits_v & m_passed_pawn_masks[1][sq.index()])) {
-        score -= 26 * (7 - (sq.index() / 8));
+        score -= 38 * (7 - (sq.index() / 8));
       }
     }
 
@@ -1260,19 +1253,19 @@ public:
       // Doubled pawns
       int count_w = (pawns_w_bits_v & file_mask) ? Bitboard(pawns_w_bits_v & file_mask).count() : 0;
       if (count_w > 1) {
-        score += -11 * (count_w - 1);
+        score += 1 * (count_w - 1);
       }
       int count_b = (pawns_b_bits_v & file_mask) ? Bitboard(pawns_b_bits_v & file_mask).count() : 0;
       if (count_b > 1) {
-        score -= -11 * (count_b - 1);
+        score -= 1 * (count_b - 1);
       }
 
       // Isolated pawns
       if ((pawns_w_bits_v & file_mask) && !(pawns_w_bits_v & adj_mask)) {
-        score += -33;
+        score += -40;
       }
       if ((pawns_b_bits_v & file_mask) && !(pawns_b_bits_v & adj_mask)) {
-        score -= -33;
+        score -= -40;
       }
     }
 
@@ -1516,6 +1509,13 @@ public:
                         std::vector<uint64_t> &search_history) {
     std::fill(m_tt.begin(), m_tt.end(), TTEntry{0, 0, Move::NO_MOVE, 0, TT_EXACT});
     Board original_board = board; // Keep a clean copy of the uncorrupted board
+
+    Movelist root_moves;
+    movegen::legalmoves(root_moves, board);
+    if (root_moves.size() == 0) {
+      return Move::NO_MOVE;
+    }
+
     m_search_start = std::chrono::steady_clock::now();
     m_node_count = 0;
 
@@ -1632,9 +1632,33 @@ public:
       }
     }
 
-    Board board = (has_white_king && has_black_king) 
-                  ? Board(rebuild_fen_from_observation(obs)) 
-                  : Board();
+    std::string fen = (has_white_king && has_black_king) 
+                      ? rebuild_fen_from_observation(obs) 
+                      : "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+    Board board(fen);
+    if (board.pieces(PieceType::KING, Color::WHITE).count() == 0 ||
+        board.pieces(PieceType::KING, Color::BLACK).count() == 0) {
+      std::cerr << "CRITICAL ERROR: Reconstructed board is missing a king!" << std::endl;
+      std::cerr << "Reconstructed FEN: " << fen << std::endl;
+      std::cerr << "has_white_king (ch 12): " << has_white_king << ", has_black_king (ch 18): " << has_black_king << std::endl;
+      std::cerr << "Active pieces in channel 12:" << std::endl;
+      for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+          if (obs_unchecked(r, c, 12)) {
+            std::cerr << "  ch12 at r=" << r << ", c=" << c << std::endl;
+          }
+        }
+      }
+      std::cerr << "Active pieces in channel 18:" << std::endl;
+      for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+          if (obs_unchecked(r, c, 18)) {
+            std::cerr << "  ch18 at r=" << r << ", c=" << c << std::endl;
+          }
+        }
+      }
+    }
 
     auto mask_r = mask.unchecked<1>();
 
