@@ -1,0 +1,1933 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>西洋棋代理人</title>
+    <meta name="description" content="D6 西洋棋智慧型代理人架構與技術解析簡報">
+
+    <!-- Google Fonts & FontAwesome -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+TC:wght@300;400;700;900&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        :root {
+            --bg-dark: #0a0a16;
+            --bg-card: rgba(20, 20, 45, 0.65);
+            --bg-glow: rgba(123, 97, 255, 0.15);
+            --primary: #7b61ff;
+            --primary-glow: rgba(123, 97, 255, 0.4);
+            --secondary: #00f0ff;
+            --secondary-glow: rgba(0, 240, 255, 0.4);
+            --accent: #ff007f;
+            --text-light: #f5f5fa;
+            --text-muted: #a3b3c9;
+            --gradient-1: linear-gradient(135deg, #7b61ff 0%, #00f0ff 100%);
+            --gradient-2: linear-gradient(135deg, #ff007f 0%, #7b61ff 100%);
+            --transition-smooth: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', 'Noto Sans TC', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-light);
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            user-select: none;
+            font-size: 20px;
+            /* Scaled up default size */
+        }
+
+        /* Ambient Background Glows */
+        .ambient-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        .glow-orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.3;
+            mix-blend-mode: screen;
+        }
+
+        .orb-1 {
+            width: 45vw;
+            height: 45vw;
+            background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
+            top: -10%;
+            left: -10%;
+            animation: float 20s infinite ease-in-out alternate;
+        }
+
+        .orb-2 {
+            width: 50vw;
+            height: 50vw;
+            background: radial-gradient(circle, var(--secondary) 0%, transparent 70%);
+            bottom: -15%;
+            right: -10%;
+            animation: float 25s infinite ease-in-out alternate-reverse;
+        }
+
+        @keyframes float {
+            0% {
+                transform: translate(0, 0) scale(1);
+            }
+
+            100% {
+                transform: translate(5%, 8%) scale(1.1);
+            }
+        }
+
+        /* Presentation Container */
+        .presentation-container {
+            position: relative;
+            z-index: 2;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        /* Header / Navigation Bar */
+        header {
+            padding: 24px 50px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(10, 10, 22, 0.4);
+            backdrop-filter: blur(10px);
+        }
+
+        .logo {
+            font-size: 1.8rem;
+            font-weight: 800;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo i {
+            -webkit-text-fill-color: var(--primary);
+        }
+
+        .slide-counter {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.05);
+            padding: 8px 20px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Main Slides area */
+        .slides-wrapper {
+            flex-grow: 1;
+            position: relative;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .slide {
+            position: absolute;
+            width: 92%;
+            height: 85%;
+            max-width: 1200px;
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(0.95) translateY(20px);
+            transition: var(--transition-smooth);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .slide.active {
+            opacity: 1;
+            pointer-events: auto;
+            transform: scale(1) translateY(0);
+        }
+
+        /* Slide Titles */
+        .slide-title-wrapper {
+            text-align: center;
+            margin-bottom: 25px;
+            width: 100%;
+        }
+
+        .slide-title {
+            font-size: 3rem;
+            /* Scaled up */
+            font-weight: 800;
+            background: linear-gradient(to right, #ffffff, var(--text-muted));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+            letter-spacing: -1px;
+        }
+
+        .slide-subtitle {
+            font-size: 1.1rem;
+            /* Scaled up */
+            color: var(--secondary);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        /* Card layout styling */
+        .glass-card {
+            background: var(--bg-card);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            padding: 24px 30px;
+            /* Scaled up */
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            transition: var(--transition-smooth);
+            width: 100%;
+        }
+
+        .glass-card:hover {
+            border-color: rgba(123, 97, 255, 0.3);
+            box-shadow: 0 20px 50px rgba(123, 97, 255, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        }
+
+        /* Grid structures */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            width: 100%;
+            align-items: stretch;
+        }
+
+        /* Slide 1: Cover Slide */
+        .slide-cover {
+            text-align: center;
+        }
+
+        .cover-badge {
+            background: rgba(123, 97, 255, 0.15);
+            border: 1px solid var(--primary);
+            color: var(--text-light);
+            padding: 10px 24px;
+            border-radius: 30px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 24px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 0 20px var(--bg-glow);
+        }
+
+        .slide-cover h1 {
+            font-size: 5rem;
+            /* Scaled up */
+            font-weight: 900;
+            line-height: 1.1;
+            margin-bottom: 24px;
+            letter-spacing: -2px;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .slide-cover p.lead {
+            font-size: 1.5rem;
+            /* Scaled up */
+            color: var(--text-muted);
+            margin-bottom: 30px;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .team-box {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 40px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 16px 40px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            display: inline-flex;
+        }
+
+        .team-member {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-light);
+        }
+
+        .team-member span {
+            color: var(--secondary);
+            font-family: monospace;
+            margin-right: 8px;
+        }
+
+        .btn-start {
+            background: var(--gradient-1);
+            color: var(--bg-dark);
+            border: none;
+            padding: 18px 44px;
+            border-radius: 35px;
+            font-size: 1.25rem;
+            font-weight: 800;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 10px 25px var(--primary-glow);
+            transition: var(--transition-smooth);
+        }
+
+        .btn-start:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px var(--secondary-glow);
+            color: #fff;
+        }
+
+        /* Slide 2: Timeline Evolution */
+        .timeline-container {
+            display: flex;
+            width: 100%;
+            justify-content: space-between;
+            position: relative;
+            margin-top: 20px;
+        }
+
+        .timeline-line {
+            position: absolute;
+            top: 25px;
+            left: 5%;
+            right: 5%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            z-index: 1;
+        }
+
+        .timeline-progress {
+            position: absolute;
+            top: 25px;
+            left: 5%;
+            width: 90%;
+            height: 4px;
+            background: var(--gradient-1);
+            z-index: 2;
+            transform-origin: left;
+            transform: scaleX(1);
+        }
+
+        .timeline-node {
+            position: relative;
+            z-index: 3;
+            width: 28%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .timeline-dot {
+            width: 54px;
+            height: 54px;
+            border-radius: 50%;
+            background: var(--bg-dark);
+            border: 4px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.3rem;
+            font-weight: 800;
+            color: var(--text-muted);
+            transition: var(--transition-smooth);
+        }
+
+        .timeline-node.active .timeline-dot {
+            border-color: var(--secondary);
+            color: var(--secondary);
+            box-shadow: 0 0 25px var(--secondary-glow);
+            transform: scale(1.1);
+        }
+
+        .timeline-node.completed .timeline-dot {
+            border-color: var(--primary);
+            color: var(--primary);
+            box-shadow: 0 0 20px var(--primary-glow);
+        }
+
+        .timeline-label {
+            margin-top: 10px;
+            font-size: 1.2rem;
+            font-weight: 800;
+            color: var(--text-muted);
+            transition: var(--transition-smooth);
+        }
+
+        .timeline-node.active .timeline-label {
+            color: #fff;
+        }
+
+        .timeline-content {
+            margin-top: 25px;
+            width: 100%;
+            min-height: 240px;
+        }
+
+        .timeline-pane {
+            display: none;
+            animation: fadeIn 0.5s forwards;
+        }
+
+        .timeline-pane.active {
+            display: block;
+        }
+
+        /* ELO Table styling */
+        .nps-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 1.15rem;
+        }
+
+        .nps-table th,
+        .nps-table td {
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 10px 16px;
+            text-align: center;
+        }
+
+        .nps-table th {
+            background: rgba(123, 97, 255, 0.15);
+            color: var(--secondary);
+            font-weight: 700;
+        }
+
+        .nps-table tr:nth-child(even) {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .feature-list {
+            list-style: none;
+            margin-top: 15px;
+        }
+
+        .feature-list li {
+            position: relative;
+            padding-left: 32px;
+            margin-bottom: 12px;
+            font-size: 1.25rem;
+            /* Scaled up */
+            line-height: 1.6;
+        }
+
+        .feature-list li::before {
+            content: "\f00c";
+            font-family: "Font Awesome 6 Free";
+            font-weight: 900;
+            position: absolute;
+            left: 0;
+            top: 4px;
+            color: var(--secondary);
+            font-size: 1rem;
+        }
+
+        /* Styled Mathematical Formulas */
+        .math-expr {
+            font-family: 'Outfit', monospace;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 12px 24px;
+            border-radius: 12px;
+            display: inline-block;
+            margin: 12px 0;
+            font-size: 1.25rem;
+            /* Scaled up */
+            color: var(--secondary);
+            text-shadow: 0 0 10px var(--secondary-glow);
+            letter-spacing: 0.5px;
+        }
+
+        .math-expr sub {
+            font-size: 0.85rem;
+            bottom: -0.2em;
+        }
+
+        /* Slide 4 & 5: Simulator layout */
+        .sim-container {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 40px;
+            width: 100%;
+        }
+
+        .sim-slider-box {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            justify-content: center;
+        }
+
+        .sim-slider-group {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 24px;
+        }
+
+        .sim-slider-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.2rem;
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+
+        .sim-slider-val {
+            color: var(--secondary);
+            font-weight: 800;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            outline: none;
+            -webkit-appearance: none;
+            accent-color: var(--primary);
+        }
+
+        .sim-pawn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-top: 15px;
+        }
+
+        .sim-pawn-stat {
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .sim-pawn-title {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .sim-pawn-num {
+            font-size: 1.3rem;
+            font-weight: 700;
+        }
+
+        .sim-pawn-num.primary-text {
+            color: var(--primary);
+        }
+
+        .endgame-board-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .endgame-board {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            grid-template-rows: repeat(8, 1fr);
+            width: 440px;
+            height: 440px;
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            overflow: visible;
+            /* Allow badges to overflow board borders slightly */
+            position: relative;
+            background: #0a0a16;
+        }
+
+        .endgame-cell {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .endgame-cell.light {
+            background-color: #ececd7;
+        }
+
+        .endgame-cell.dark {
+            background-color: #4b7399;
+        }
+
+        .endgame-cell.light .cell-tag {
+            color: #4b7399;
+        }
+
+        .endgame-cell.dark .cell-tag {
+            color: #ececd7;
+        }
+
+        .endgame-piece {
+            font-size: 3.5rem;
+            z-index: 2;
+            display: inline-block;
+            line-height: 1;
+            transform: translateY(-4px);
+            /* Shift piece up slightly */
+        }
+
+        .endgame-piece.white {
+            color: #ffffff;
+            text-shadow: -1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+        }
+
+        .endgame-piece.black {
+            color: #1e293b;
+            text-shadow: -1.5px -1.5px 0 #fff, 1.5px -1.5px 0 #fff, -1.5px 1.5px 0 #fff, 1.5px 1.5px 0 #fff;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+        }
+
+        .cell-tag {
+            position: absolute;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .cell-tag.rank {
+            top: 2px;
+            left: 4px;
+        }
+
+        .cell-tag.file {
+            bottom: 2px;
+            right: 4px;
+        }
+
+        .endgame-badge {
+            position: absolute;
+            bottom: -5px;
+            /* Nudge badge down slightly */
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.75rem;
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-weight: 800;
+            z-index: 3;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        .endgame-badge.white {
+            background: rgba(0, 240, 255, 0.95);
+            color: #000;
+            box-shadow: 0 2px 4px rgba(0, 240, 255, 0.3);
+        }
+
+        .endgame-badge.black {
+            background: rgba(255, 0, 127, 0.95);
+            color: #fff;
+            box-shadow: 0 2px 4px rgba(255, 0, 127, 0.3);
+        }
+
+        .board-legend {
+            display: flex;
+            gap: 20px;
+            margin-top: 12px;
+            font-size: 1.05rem;
+            color: var(--text-muted);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .legend-dot.white {
+            background: #ffffff;
+            box-shadow: 0 0 6px #ffffff;
+        }
+
+        .legend-dot.black {
+            background: var(--accent);
+            box-shadow: 0 0 6px var(--accent);
+        }
+
+        /* Slide 6: Elo screenshot */
+        .elo-box {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+        }
+
+        .elo-img-container {
+            position: relative;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 15px 40px rgba(0, 240, 255, 0.15);
+            max-width: 100%;
+        }
+
+        .elo-img {
+            display: block;
+            max-height: 350px;
+            /* Scaled up */
+            max-width: 100%;
+            object-fit: contain;
+        }
+
+        /* Bottom Controls / Progress Bar */
+        footer {
+            padding: 20px 50px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(10, 10, 22, 0.4);
+            backdrop-filter: blur(10px);
+        }
+
+        .controls {
+            display: flex;
+            gap: 16px;
+        }
+
+        .btn-control {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            font-size: 1.1rem;
+        }
+
+        .btn-control:hover {
+            background: var(--primary);
+            border-color: var(--primary);
+            box-shadow: 0 0 15px var(--primary-glow);
+            transform: scale(1.05);
+        }
+
+        .btn-control:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+            background: rgba(255, 255, 255, 0.02) !important;
+            border-color: rgba(255, 255, 255, 0.05) !important;
+        }
+
+        .progress-bar-container {
+            flex-grow: 1;
+            margin: 0 40px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: var(--gradient-1);
+            width: 0%;
+            transition: width 0.3s ease;
+            box-shadow: 0 0 10px var(--secondary-glow);
+        }
+
+        .shortcuts-tip {
+            font-size: 0.95rem;
+            /* Scaled up */
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .kbd {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 0.85rem;
+            font-family: monospace;
+            color: #fff;
+        }
+
+        /* Slide 3 leaderboard & matrix styling */
+        .leaderboard-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .leaderboard-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 12px;
+            padding: 10px 18px;
+            transition: var(--transition-smooth);
+        }
+
+        .leaderboard-item:hover {
+            transform: translateX(5px);
+            border-color: rgba(123, 97, 255, 0.25);
+            background: rgba(123, 97, 255, 0.04);
+        }
+
+        .leaderboard-item.rank-1 {
+            border-left: 5px solid #ffd700;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.08);
+        }
+
+        .leaderboard-item.rank-2 {
+            border-left: 5px solid #c0c0c0;
+            box-shadow: 0 0 15px rgba(192, 192, 192, 0.08);
+        }
+
+        .leaderboard-item.rank-3 {
+            border-left: 5px solid #cd7f32;
+            box-shadow: 0 0 15px rgba(205, 127, 50, 0.08);
+        }
+
+        .rank-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .rank-number {
+            font-size: 1.3rem;
+            font-weight: 800;
+            min-width: 30px;
+        }
+
+        .rank-1 .rank-number {
+            color: #ffd700;
+        }
+
+        .rank-2 .rank-number {
+            color: #c0c0c0;
+        }
+
+        .rank-3 .rank-number {
+            color: #cd7f32;
+        }
+
+        .agent-name {
+            font-size: 1.15rem;
+            font-weight: 800;
+        }
+
+        .rank-desc {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .rank-score {
+            font-size: 1.15rem;
+            font-weight: 800;
+            text-align: right;
+        }
+
+        .rank-1 .rank-score {
+            color: #ffd700;
+        }
+
+        .rank-2 .rank-score {
+            color: var(--secondary);
+        }
+
+        .rank-3 .rank-score {
+            color: var(--text-muted);
+        }
+
+        /* Matrix cell color utilities */
+        .matrix-self {
+            background: rgba(255, 255, 255, 0.03) !important;
+            color: rgba(255, 255, 255, 0.25) !important;
+        }
+
+        .matrix-win {
+            background: rgba(0, 255, 102, 0.08) !important;
+            color: #00ff66 !important;
+            font-weight: 700;
+        }
+
+        .matrix-loss {
+            background: rgba(255, 0, 127, 0.08) !important;
+            color: #ff007f !important;
+        }
+
+        .matrix-draw {
+            background: rgba(0, 240, 255, 0.08) !important;
+            color: #00f0ff !important;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Ambient background animations -->
+    <div class="ambient-bg">
+        <div class="glow-orb orb-1"></div>
+        <div class="glow-orb orb-2"></div>
+    </div>
+
+    <div class="presentation-container">
+        <!-- Header -->
+        <header>
+            <div class="logo">
+                <i class="fa-solid fa-chess-knight"></i>
+                <span>ML Arena Chess Agent</span>
+            </div>
+            <div class="slide-counter">
+                Slide <span id="current-slide-num">1</span> / <span id="total-slides-num">8</span>
+            </div>
+        </header>
+
+        <!-- Main Slides Window -->
+        <div class="slides-wrapper">
+
+            <!-- Slide 1: Cover -->
+            <div class="slide active" id="slide-1">
+                <div class="slide-cover">
+                    <div class="cover-badge">
+                        <i class="fa-solid fa-bolt"></i> RL 自對弈進化與 C++ 高速引擎
+                    </div>
+                    <h1>D6 西洋棋智慧型代理人</h1>
+                    <p class="lead">超高性能 C++ alphab- beta 搜尋核心的西洋棋大師</p>
+
+                    <div class="team-box">
+                        <div class="team-member"><span>劉佳翰</span>41241213S</div>
+                        <div class="team-member"><span>黃詰霖</span>41170030H</div>
+                    </div>
+                    <br>
+                    <button class="btn-start" onclick="nextSlide()">
+                        開始技術簡報 <i class="fa-solid fa-arrow-right"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Slide 2: Evolution -->
+            <div class="slide" id="slide-2">
+                <div class="slide-title-wrapper">
+                    <h2 class="slide-title">代理人演進歷程</h2>
+                    <p class="slide-subtitle">Evolutionary Journey</p>
+                </div>
+
+                <div class="timeline-container">
+                    <div class="timeline-line"></div>
+                    <div class="timeline-progress" id="tl-progress" style="transform: scaleX(0);"></div>
+
+                    <div class="timeline-node active" onclick="setTimeline(0)">
+                        <div class="timeline-dot">D4</div>
+                        <div class="timeline-label">Python 搜尋</div>
+                    </div>
+                    <div class="timeline-node" onclick="setTimeline(1)">
+                        <div class="timeline-dot">D6</div>
+                        <div class="timeline-label">C++ 重寫</div>
+                    </div>
+                    <div class="timeline-node" onclick="setTimeline(2)">
+                        <div class="timeline-dot">D7</div>
+                        <div class="timeline-label">自進化 RL</div>
+                    </div>
+                </div>
+
+                <div class="timeline-content glass-card">
+                    <!-- D5 Pro Panel -->
+                    <div class="timeline-pane active" id="tl-pane-0">
+                        <h3 style="font-size: 1.5rem; color: var(--secondary); margin-bottom: 8px;">D4：手刻評估與 Python
+                            搜尋</h3>
+                        <p style="font-size: 1.15rem; line-height: 1.6; color: var(--text-muted); margin-bottom: 12px;">
+                            以 Python 實作 α-β 搜尋，並使用傳統西洋棋理論的手刻評估函數 (HCE)。
+                        </p>
+                        <ul class="feature-list" style="margin-top:0;">
+                            <li><span style="font-weight: 800;">系統組成</span>：開局庫 + α-β 搜尋 (手刻評估函數) + 殘局庫。</li>
+                            <li><span style="font-weight: 800;">局限性</span>：Python 執行開銷極大，搜尋深度淺，對局耗時長。</li>
+                        </ul>
+                    </div>
+                    <!-- D6 C++ Panel -->
+                    <div class="timeline-pane" id="tl-pane-1">
+                        <h3 style="font-size: 1.5rem; color: var(--secondary); margin-bottom: 8px;">D6 C++：速度升級與 C++ 優化
+                        </h3>
+                        <p style="font-size: 1.15rem; line-height: 1.6; color: var(--text-muted);">
+                            核心搜尋改用 C++ 重寫，並透過 Pybind11 與 Python 做無縫介接，搜尋速度大幅飛躍。
+                        </p>
+                        <table class="nps-table">
+                            <thead>
+                                <tr>
+                                    <th>版本</th>
+                                    <th>搜尋核心</th>
+                                    <th>平均搜尋速度 (NPS)</th>
+                                    <th>效能對比</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>D4</td>
+                                    <td>Python 原生搜尋</td>
+                                    <td>20,190.3 nps</td>
+                                    <td>基準 (1x)</td>
+                                </tr>
+                                <tr style="color: var(--secondary);">
+                                    <td>D6 C++</td>
+                                    <td>C++ 優化核心</td>
+                                    <td><span style="font-weight: 800; color: var(--secondary);">3,551,025.7 nps</span>
+                                    </td>
+                                    <td><span style="font-weight: 800; color: var(--secondary);">提升 ~175.9x</span>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- D7 RL Panel -->
+                    <div class="timeline-pane" id="tl-pane-2">
+                        <h3 style="font-size: 1.5rem; color: var(--secondary); margin-bottom: 8px;">D7 RL：強化學習訓練評估函數
+                        </h3>
+                        <p style="font-size: 1.15rem; line-height: 1.6; color: var(--text-muted); margin-bottom: 12px;">
+                            在 C++ 高速搜尋骨架上，設計 459 維盤面特徵，利用強化學習與梯度下降自動調優評估參數。
+                        </p>
+                        <ul class="feature-list" style="margin-top:0;">
+                            <li><span style="font-weight: 800;">評估常數自動調優</span>：擺脫人工手調參數，以 PyTorch 自動學習 459 個特徵的精確價值。
+                            </li>
+                            <li><span style="font-weight: 800;">進化管線</span>：自對弈生成 quiet 盤面 &rarr; PyTorch 微調 &rarr;
+                                權重覆寫回填 C++ 重新 inplace 編譯。</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Slide 3: Tournament Report -->
+            <div class="slide" id="slide-3">
+                <div class="slide-title-wrapper">
+                    <h2 class="slide-title">對戰大賽統計報告</h2>
+                    <p class="slide-subtitle">Tournament Report</p>
+                </div>
+
+                <div class="grid-2" style="width: 100%;">
+                    <!-- Left: Win-rate Statistics & Matrix -->
+                    <div class="glass-card"
+                        style="padding: 20px 24px; display: flex; flex-direction: column; justify-content: center;">
+                        <h3 style="font-size: 1.35rem; color: var(--secondary); margin-bottom: 8px;"><i
+                                class="fa-solid fa-gamepad"></i> 賽制配置</h3>
+                        <p style="font-size: 0.95rem; color: var(--text-muted); line-height: 1.4; margin-bottom: 12px;">
+                            雙方各擔任 10 場白棋與 10 場黑棋，共 <strong>20 場對局</strong> (使用 10 核心平行運算)。
+                        </p>
+
+                        <h3 style="font-size: 1.35rem; color: var(--secondary); margin-bottom: 8px;"><i
+                                class="fa-solid fa-table-cells"></i> 對戰交叉對局矩陣 (Cross Table)</h3>
+                        <table class="nps-table" style="font-size: 0.88rem; margin-top: 5px; margin-bottom: 15px;">
+                            <thead>
+                                <tr>
+                                    <th>Agent</th>
+                                    <th>vs D6</th>
+                                    <th>vs D7</th>
+                                    <th>vs D4</th>
+                                    <th>總積分</th>
+                                    <th>勝分率</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td style="font-weight: 800; color: #ffd700;">D6</td>
+                                    <td class="matrix-self">—</td>
+                                    <td class="matrix-win">20.0 <span
+                                            style="font-size: 0.72rem; display:block;">(20勝/0和)</span></td>
+                                    <td class="matrix-win">20.0 <span
+                                            style="font-size: 0.72rem; display:block;">(20勝/0和)</span></td>
+                                    <td style="font-weight: 800; color: #ffd700;">40.0</td>
+                                    <td style="font-weight: 800; color: #ffd700;">100.0%</td>
+                                </tr>
+                                <tr>
+                                    <td style="font-weight: 800; color: var(--secondary);">D7</td>
+                                    <td class="matrix-loss">0.0 <span
+                                            style="font-size: 0.72rem; display:block;">(0勝/20敗)</span></td>
+                                    <td class="matrix-self">—</td>
+                                    <td class="matrix-win">12.5 <span
+                                            style="font-size: 0.72rem; display:block;">(12勝/1和/7敗)</span></td>
+                                    <td style="font-weight: 800; color: var(--secondary);">12.5</td>
+                                    <td style="font-weight: 800; color: var(--secondary);">31.25%</td>
+                                </tr>
+                                <tr>
+                                    <td style="font-weight: 800; color: var(--text-muted);">D4</td>
+                                    <td class="matrix-loss">0.0 <span
+                                            style="font-size: 0.72rem; display:block;">(0勝/20敗)</span></td>
+                                    <td class="matrix-loss">6.5 <span
+                                            style="font-size: 0.72rem; display:block;">(6勝/1和/13敗)</span></td>
+                                    <td class="matrix-self">—</td>
+                                    <td>6.5</td>
+                                    <td>16.25%</td>
+                                </tr>
+                            </tbody>
+                        </table>
+
+                        <p style="font-size: 0.78rem; color: var(--text-muted); font-style: italic;">
+                            * 註：勝場得 1.0 分，和局得 0.5 分，敗場得 0.0 分。
+                        </p>
+                    </div>
+
+                    <!-- Right: Rankings & Performance -->
+                    <div class="glass-card"
+                        style="padding: 20px 24px; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <h3 style="font-size: 1.35rem; color: var(--secondary); margin-bottom: 8px;"><i
+                                    class="fa-solid fa-trophy"></i> Agent 強度排行榜</h3>
+                            <div class="leaderboard-list">
+                                <!-- Rank 1 -->
+                                <div class="leaderboard-item rank-1">
+                                    <div class="rank-info">
+                                        <div class="rank-number">1st</div>
+                                        <div>
+                                            <div class="agent-name" style="color: #ffd700;">D6 🥇</div>
+                                            <div class="rank-desc">壓倒性制霸，雙殺所有對手</div>
+                                        </div>
+                                    </div>
+                                    <div class="rank-score">
+                                        <div>40.0 / 40.0</div>
+                                        <div style="font-size: 0.85rem; opacity: 0.8;">勝率 100.0%</div>
+                                    </div>
+                                </div>
+                                <!-- Rank 2 -->
+                                <div class="leaderboard-item rank-2">
+                                    <div class="rank-info">
+                                        <div class="rank-number">2nd</div>
+                                        <div>
+                                            <div class="agent-name" style="color: #c0c0c0;">D7 🥈</div>
+                                            <div class="rank-desc">實力中游，輕取 Python 舊版</div>
+                                        </div>
+                                    </div>
+                                    <div class="rank-score">
+                                        <div>12.5 / 40.0</div>
+                                        <div style="font-size: 0.85rem; opacity: 0.8;">勝率 31.25%</div>
+                                    </div>
+                                </div>
+                                <!-- Rank 3 -->
+                                <div class="leaderboard-item rank-3">
+                                    <div class="rank-info">
+                                        <div class="rank-number">3rd</div>
+                                        <div>
+                                            <div class="agent-name" style="color: #cd7f32;">D4 🥉</div>
+                                            <div class="rank-desc">稍弱代理人，搜尋速度有差距，但在mlarena無敗績</div>
+                                        </div>
+                                    </div>
+                                    <div class="rank-score">
+                                        <div>6.5 / 40.0</div>
+                                        <div style="font-size: 0.85rem; opacity: 0.8;">勝率 16.25%</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px;">
+                            <h3 style="font-size: 1.15rem; color: var(--secondary); margin-bottom: 8px;"><i
+                                    class="fa-solid fa-gauge-high"></i> 搜尋速度 (NPS) 對比</h3>
+                            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;">
+                                <div
+                                    style="font-size: 1rem; display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.02); padding: 8px 16px; border-radius: 8px;">
+                                    <span style="font-weight: 700; color: var(--text-light);">D4 (Python)</span>
+                                    <span>平均 <strong style="font-size: 1.15rem; color: #fff;">20,190.3</strong> NPS
+                                        &nbsp;|&nbsp; 最大 <strong style="color: var(--text-muted);">47,221.7</strong>
+                                        NPS</span>
+                                </div>
+                                <div
+                                    style="font-size: 1rem; display: flex; justify-content: space-between; align-items: center; background: rgba(0, 240, 255, 0.04); border: 1px solid rgba(0, 240, 255, 0.1); padding: 8px 16px; border-radius: 8px; color: var(--secondary);">
+                                    <span style="font-weight: 700;">D6 (C++ 核心)</span>
+                                    <span>平均 <strong style="font-size: 1.15rem;">3,551,025.7</strong> NPS &nbsp;|&nbsp;
+                                        最大 <strong style="opacity: 0.85;">16,087,093.3</strong> NPS</span>
+                                </div>
+                                <div
+                                    style="font-size: 1rem; display: flex; justify-content: space-between; align-items: center; background: rgba(123, 97, 255, 0.04); border: 1px solid rgba(123, 97, 255, 0.1); padding: 8px 16px; border-radius: 8px; color: var(--primary);">
+                                    <span style="font-weight: 700; color: var(--secondary);">D7 (C++ & RL)</span>
+                                    <span>平均 <strong
+                                            style="font-size: 1.15rem; color: var(--secondary);">3,666,374.3</strong>
+                                        NPS &nbsp;|&nbsp; 最大 <strong
+                                            style="opacity: 0.85; color: var(--secondary);">17,916,052.4</strong>
+                                        NPS</span>
+                                </div>
+                            </div>
+                            <p
+                                style="font-size: 0.78rem; color: var(--text-muted); margin-top: 8px; font-style: italic;">
+                                * 核心結論：搜尋速度與實力呈強烈正相關。C++ 引擎速度較 Python 提升近 180 倍。
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Slide 4: Search Algorithms -->
+            <div class="slide" id="slide-4">
+                <div class="slide-title-wrapper">
+                    <h2 class="slide-title">Alpha-Beta 搜尋與優化</h2>
+                    <p class="slide-subtitle">Search Core & Optimizations</p>
+                </div>
+
+                <div class="glass-card" style="padding: 24px 35px;">
+                    <h3
+                        style="font-size: 1.4rem; color: var(--secondary); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                        <i class="fa-solid fa-brain"></i> Alpha-Beta 搜尋原理
+                    </h3>
+                    <p
+                        style="font-size: 1.1rem; color: var(--text-light); margin-bottom: 25px; line-height: 1.7; text-align: justify;">
+                        Alpha-Beta 搜尋基於極大極小（Minimax）博弈決策樹。在搜尋中，白方尋求最大評估值，黑方尋求最小評估值。演算法動態維護兩個邊界：<span
+                            style="font-weight: 800; color: var(--secondary);">Alpha (α)</span> 代表白方已確保能獲得的最低分數；<span
+                            style="font-weight: 800; color: var(--secondary);">Beta (β)</span>
+                        代表黑方容許白方獲得的最高分數。一旦搜尋中發現某分支的結果 <span style="font-weight: 800; color: var(--accent);">α &ge;
+                            β</span>，即可判定對手絕不可能允許此局面發生，因而立即停止該分支的後續展開（即進行<span
+                            style="font-weight: 800; color: var(--accent);">剪枝</span>），在不影響決策正確性的前提下，呈指數級減少節點評估量。
+                    </p>
+
+                    <h3
+                        style="font-size: 1.4rem; color: var(--secondary); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                        <i class="fa-solid fa-gears"></i> 搜尋優化方式與功能分類
+                    </h3>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 40px; font-size: 1.15rem;">
+                        <div>
+                            <span style="color: var(--accent); font-weight: 800; display: block; margin-bottom: 6px;"><i
+                                    class="fa-solid fa-scissors"></i> 剪枝技術 (Pruning)</span>
+                            <ul
+                                style="list-style: square; padding-left: 20px; color: var(--text-muted); line-height: 1.5;">
+                                <li>空步剪枝 (Null Move Pruning, NMP)</li>
+                                <li>主要變化搜尋 (Principal Variation Search, PVS)</li>
+                                <li>晚移動降深 (Late Move Reduction, LMR)</li>
+                            </ul>
+                        </div>
+
+                        <div>
+                            <span
+                                style="color: var(--secondary); font-weight: 800; display: block; margin-bottom: 6px;"><i
+                                    class="fa-solid fa-sort"></i> 著法排序 (Move Ordering)</span>
+                            <ul
+                                style="list-style: square; padding-left: 20px; color: var(--text-muted); line-height: 1.5;">
+                                <li>歷史啟發 (History Heuristics)</li>
+                                <li>殺手著法 (Killer Moves)</li>
+                            </ul>
+                        </div>
+
+                        <div>
+                            <span
+                                style="color: var(--primary); font-weight: 800; display: block; margin-bottom: 6px;"><i
+                                    class="fa-solid fa-clock"></i> 搜尋與時間控制 (Control)</span>
+                            <ul
+                                style="list-style: square; padding-left: 20px; color: var(--text-muted); line-height: 1.5;">
+                                <li>反覆加深 (Iterative Deepening)</li>
+                                <li>期望窗口 (Aspiration Windows)</li>
+                            </ul>
+                        </div>
+
+                        <div>
+                            <span style="color: #00ff66; font-weight: 800; display: block; margin-bottom: 6px;"><i
+                                    class="fa-solid fa-memory"></i> 狀態快取 (Caching)</span>
+                            <ul
+                                style="list-style: square; padding-left: 20px; color: var(--text-muted); line-height: 1.5;">
+                                <li>Zobrist 置換表 (Transposition Table, TT)</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Slide 5: Evaluation Features & RL Elements -->
+            <div class="slide" id="slide-5">
+                <div class="slide-title-wrapper">
+                    <h2 class="slide-title">評估特徵與強化學習要素</h2>
+                    <p class="slide-subtitle">Evaluation Features & RL Elements</p>
+                </div>
+
+                <div class="grid-2" style="width: 100%;">
+                    <div class="glass-card"
+                        style="padding: 24px 35px; display: flex; flex-direction: column; justify-content: center;">
+                        <h3 style="font-size: 1.65rem; color: var(--secondary); margin-bottom: 12px;"><i
+                                class="fa-solid fa-circle-nodes"></i> 459 維評估特徵四大分類</h3>
+                        <ul
+                            style="font-size: 1.25rem; color: var(--text-muted); line-height: 1.6; list-style: square; padding-left: 20px;">
+                            <li><span style="font-weight: 800; color: #fff;">子力價值 (5維)</span>：兵、馬、象、車、后 的基本分值。</li>
+                            <li><span style="font-weight: 800; color: #fff;">位置價值 (320維)</span>：5 類棋子在 64 格上的位置評估矩陣
+                                (PST)。</li>
+                            <li><span style="font-weight: 800; color: #fff;">王城安全 (128維)</span>：王在「中局」與「殘局」的獨立位置評估矩陣。
+                            </li>
+                            <li><span style="font-weight: 800; color: #fff;">特殊結構 (6維)</span>：雙象、王易位、車開放線、通路兵、疊兵、孤兵。
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="glass-card"
+                        style="padding: 24px 35px; display: flex; flex-direction: column; justify-content: center;">
+                        <h3 style="font-size: 1.65rem; color: var(--secondary); margin-bottom: 12px;"><i
+                                class="fa-solid fa-gamepad"></i> 強化學習 (RL) 要素定義</h3>
+                        <ul
+                            style="font-size: 1.25rem; color: var(--text-muted); line-height: 1.6; list-style: square; padding-left: 20px;">
+                            <li><span style="font-weight: 800; color: #fff;">環境 (Environment)</span>：自我對弈西洋棋環境，以 <span
+                                    style="font-family: monospace; color: var(--secondary);">chess.Board()</span>
+                                維護與推動棋局狀態。</li>
+                            <li><span style="font-weight: 800; color: #fff;">狀態 (State)</span>：重構自 FEN 的 <span
+                                    style="font-family: monospace; color: var(--secondary);">(8, 8, 111)</span>
+                                矩陣（包含子力位置、易位權限與過路兵標記）。</li>
+                            <li><span style="font-weight: 800; color: #fff;">行動 (Action)</span>：著法空間對應 <span
+                                    style="font-weight: 800; color: #fff;">0 ~ 4671</span> 的索引值，代表移動起點與 73 個相對移動平面。</li>
+                            <li><span style="font-weight: 800; color: #fff;">獎勵 (Reward)</span>：以最終對局結果計算。白勝得 <span
+                                    style="font-weight: 800; color: var(--secondary);">1.0</span>，黑勝得 <span
+                                    style="font-weight: 800; color: var(--secondary);">0.0</span>，平局或超步數得 <span
+                                    style="font-weight: 800; color: var(--secondary);">0.5</span>（特徵以白方視角為正計算）。</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Slide 6: Middlegame Evaluation Example -->
+            <div class="slide" id="slide-6">
+                <div class="slide-title-wrapper">
+                    <h2 class="slide-title">中局實際評估得分計算</h2>
+                    <p class="slide-subtitle">Middlegame Evaluation Example</p>
+                </div>
+
+                <div class="sim-container">
+                    <div class="sim-slider-box">
+                        <div class="glass-card" style="padding: 16px 24px; margin-bottom: 0;">
+                            <h3 style="font-size: 1.5rem; color: var(--secondary); margin-bottom: 8px;"><i
+                                    class="fa-solid fa-calculator"></i> 中局評估計算 (Game Phase = 10)</h3>
+                            <p
+                                style="font-size: 1.15rem; color: var(--text-muted); line-height: 1.4; margin-bottom: 6px;">
+                                FEN 盤面：<code>3qk3/n7/8/8/8/2N2Q2/8/6K1 w - - 0 1</code> (含后、馬，半局階段)
+                            </p>
+                            <ul
+                                style="font-size: 1.12rem; color: var(--text-muted); line-height: 1.45; list-style: square; padding-left: 18px;">
+                                <li><span style="font-weight: 800; color: #fff;">騎士 (Knight) 評估</span>：
+                                    <br>• 白馬 c3 (活躍發展)：489 - 355 (PST) = <span
+                                        style="font-weight: 800; color: var(--secondary);">134 分</span>
+                                    <br>• 黑馬 a6 (邊緣被動)：489 - 395 (PST) = <span
+                                        style="font-weight: 800; color: var(--accent);">94 分</span>
+                                </li>
+                                <li style="margin-top: 4px;"><span style="font-weight: 800; color: #fff;">皇后 (Queen)
+                                        評估</span>：
+                                    <br>• 白后 f3 (主動出擊)：2320 - 528 (PST) = <span
+                                        style="font-weight: 800; color: var(--secondary);">1792 分</span>
+                                    <br>• 黑后 d8 (底線未動)：2320 - 603 (PST) = <span
+                                        style="font-weight: 800; color: var(--accent);">1717 分</span>
+                                </li>
+                                <li style="margin-top: 4px;"><span style="font-weight: 800; color: #fff;">王城安全與易位 (King
+                                        Castling)</span>：
+                                    <br>• 白王 g1 (已易位)：PST 權重 19876 分，王易位項：<span
+                                        style="font-weight: 800; color: var(--secondary);">-176 分</span>
+                                    <br>• 黑王 e8 (未易位)：PST 權重 19734 分，易位項：<span
+                                        style="font-weight: 800; color: var(--accent);">0 分</span>
+                                </li>
+                                <li style="margin-top: 4px;"><span
+                                        style="font-weight: 800; color: #fff;">雙方總分與評估值</span>：
+                                    <br>• 白方總分 = 19876 (王) + 1792 (后) + 134 (馬) - 176 (易位) = <span
+                                        style="font-weight: 800; color: #fff;">21626 分</span>
+                                    <br>• 黑方總分 = 19734 (王) + 1717 (后) + 94 (馬) = <span
+                                        style="font-weight: 800; color: #fff;">21545 分</span>
+                                    <br>• <span style="font-weight: 800; color: var(--secondary);">評估總分
+                                        (白方視角)</span>：白總分 - 黑總分 = <span
+                                        style="font-weight: 800; color: var(--secondary);">+81 CP</span> (白優)
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="sim-slider-box">
+                        <!-- Chessboard Container -->
+                        <div class="endgame-board-container">
+                            <div class="endgame-board" id="endgame-board"></div>
+                            <div class="board-legend">
+                                <div class="legend-item">
+                                    <div class="legend-dot white"></div><span>白方 (得分為正)</span>
+                                </div>
+                                <div class="legend-item">
+                                    <div class="legend-dot black"></div><span>黑方 (得分為負)</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Slide 7: RL Pipeline -->
+            <div class="slide" id="slide-7">
+                <div class="slide-title-wrapper">
+                    <h2 class="slide-title">模型訓練與超參數配置</h2>
+                    <p class="slide-subtitle">Model Training & Hyperparameters</p>
+                </div>
+
+                <div class="grid-2" style="width: 100%;">
+                    <div class="glass-card"
+                        style="padding: 24px 30px; display: flex; flex-direction: column; justify-content: center;">
+                        <h3 style="font-size: 1.65rem; color: var(--secondary); margin-bottom: 12px;"><i
+                                class="fa-solid fa-graduation-cap"></i> 兩階段訓練模式</h3>
+                        <ul
+                            style="font-size: 1.25rem; color: var(--text-muted); line-height: 1.6; list-style: square; padding-left: 20px;">
+                            <li><span style="font-weight: 800; color: #fff;">階段 1：50 萬筆 Pre-training
+                                    (預訓練)</span><br>為求收斂，優先載入包含 500,000 筆對局局面及 Stockfish 評估分（以厘兵為單位）的數據集，進行監督式預訓練打底。
+                            </li>
+                            <li style="margin-top: 10px;"><span style="font-weight: 800; color: #fff;">階段 2：RL 自對弈微調
+                                    (Fine-Tuning)</span><br>預訓練完成後，採自對弈模式，僅在 quiet 盤面（安靜盤面，即排除將軍、吃子等劇烈交戰的穩定局面）提取 459
+                                維特徵，配合局終輸贏結果微調參數。</li>
+                        </ul>
+                    </div>
+
+                    <div class="glass-card"
+                        style="padding: 24px 30px; display: flex; flex-direction: column; justify-content: center;">
+                        <h3 style="font-size: 1.65rem; color: var(--secondary); margin-bottom: 12px;"><i
+                                class="fa-solid fa-sliders"></i> 超參數與損失函數 (Loss)</h3>
+                        <ul
+                            style="font-size: 1.22rem; color: var(--text-muted); line-height: 1.55; list-style: square; padding-left: 20px;">
+                            <li><span style="font-weight: 800; color: #fff;">學習率 (Learning Rate)</span>：
+                                <br>• 預訓練階段：<span style="font-weight: 800; color: var(--secondary);">LR = 0.1</span> (搭配
+                                Plateau 減半機制)
+                                <br>• RL 自對弈微調：<span style="font-weight: 800; color: var(--secondary);">LR = 0.05</span>
+                                (以 Adam 微調)
+                            </li>
+                            <li style="margin-top: 8px;"><span style="font-weight: 800; color: #fff;">損失函數 (Loss
+                                    Function)</span>：
+                                <br>預測勝率 P(勝率) = &sigma;(Score / 400)。以均方誤差最小化預測勝率與實際勝負：
+                                <div class="math-expr" style="margin: 6px 0; padding: 8px 18px; font-size: 1.2rem;">Loss
+                                    = MSE(P(勝率), Result)</div>
+                            </li>
+                            <li style="margin-top: 8px;"><span style="font-weight: 800; color: #fff;">訓練次數詳細說明</span>：
+                                <br>• 預訓練階段 (監督學習)：對 50 萬筆數據進行 <span
+                                    style="font-weight: 800; color: var(--secondary);">30 個 Epochs</span> 的梯度下降，每 Epoch
+                                批次大小 4096，收斂極為徹底。
+                                <br>• RL 自對弈進化：經歷 <span style="font-weight: 800; color: var(--secondary);">4 代
+                                    (Generations)</span> 的迭代演進，每代自對弈局面產生後微調 <span
+                                    style="font-weight: 800; color: var(--secondary);">5 個 Epochs</span>。
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Slide 8: ELO & Battle Stats Dashboard -->
+            <div class="slide" id="slide-8">
+                <div class="slide-title-wrapper">
+                    <h2 class="slide-title">實戰表現與 Elo 積分</h2>
+                    <p class="slide-subtitle">Elo Rating & Class Rankings</p>
+                </div>
+
+                <div class="grid-2" style="width: 100%; align-items: stretch;">
+                    <!-- Left: Group overall stats dashboard -->
+                    <div class="glass-card"
+                        style="padding: 24px 30px; display: flex; flex-direction: column; justify-content: center; height: 100%;">
+                        <h3 style="font-size: 1.5rem; color: var(--secondary); margin-bottom: 15px;"><i
+                                class="fa-solid fa-chart-line"></i> 小組實戰數據看板</h3>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                            <div
+                                style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); padding: 12px; border-radius: 12px; text-align: center;">
+                                <div style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 5px;">小組總場數
+                                </div>
+                                <div style="font-size: 1.8rem; font-weight: 800; color: #fff;" id="group-total-games">
+                                    1,215</div>
+                            </div>
+                            <div
+                                style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); padding: 12px; border-radius: 12px; text-align: center;">
+                                <div style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 5px;">小組勝率</div>
+                                <div style="font-size: 1.8rem; font-weight: 800; color: var(--secondary); text-shadow: 0 0 10px var(--secondary-glow);"
+                                    id="group-win-rate">99.26%</div>
+                            </div>
+                        </div>
+
+                        <div
+                            style="background: rgba(123, 97, 255, 0.05); border: 1px solid rgba(123, 97, 255, 0.15); padding: 15px; border-radius: 12px; display: flex; align-items: center; justify-content: space-between;">
+                            <div>
+                                <div style="font-size: 0.85rem; color: var(--text-muted);">小組勝場 / 敗場 / 和局</div>
+                                <div style="font-size: 1.3rem; font-weight: 700; color: #fff; margin-top: 3px;"
+                                    id="group-wld">1206勝 / 5敗 / 4和</div>
+                            </div>
+                            <div style="font-size: 2.2rem; color: var(--primary);"><i class="fa-solid fa-chess"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Individual player rankings list -->
+                    <div class="glass-card"
+                        style="display: flex; flex-direction: column; justify-content: center; padding: 24px 30px;">
+                        <h3
+                            style="font-size: 1.5rem; color: var(--secondary); margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                            <span><i class="fa-solid fa-trophy"></i> 兩人小組天梯捷報</span>
+                            <span
+                                style="display: inline-flex; align-items: center; gap: 8px; font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">
+                                <span id="api-status-dot"
+                                    style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background-color: #ef4444; box-shadow: 0 0 6px #ef4444; transition: all 0.3s ease;"></span>
+                                <span id="api-status">API 連線失敗 (使用靜態緩存)</span>
+                            </span>
+                        </h3>
+                        <ul class="feature-list"
+                            style="margin-top: 0; font-size: 1.15rem; list-style: none; padding-left: 0;">
+                            <!-- Player 1 -->
+                            <li
+                                style="position: relative; padding-left: 30px; margin-bottom: 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 12px;">
+                                <i class="fa-solid fa-medal"
+                                    style="position: absolute; left: 0; top: 4px; color: #ffd700; font-size: 1.3rem;"></i>
+                                <span style="font-weight: 800; color: #fff; font-size: 1.25rem;">劉佳翰</span>
+                                <span
+                                    style="font-size: 0.9rem; color: var(--text-muted); font-family: monospace;">(41241213S
+                                    / 小學生)</span>
+                                <div
+                                    style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; font-size: 1.05rem;">
+                                    <div>• 天梯積分：<strong style="color: var(--secondary);" id="p1-elo">1787.6</strong> 分
+                                    </div>
+                                    <div>• 班級排名：<strong style="color: #ffd700;" id="p1-rank">第 1 名 (冠軍 🏆)</strong>
+                                    </div>
+                                    <div>• 個人戰績：<span id="p1-stats" style="color: var(--text-muted);">1164勝 / 5敗 /
+                                            4和</span></div>
+                                    <div>• 個人勝率：<strong style="color: var(--secondary);" id="p1-rate">99.23%</strong>
+                                    </div>
+                                </div>
+                            </li>
+                            <!-- Player 2 -->
+                            <li
+                                style="position: relative; padding-left: 30px; margin-bottom: 15px; padding-bottom: 5px;">
+                                <i class="fa-solid fa-medal"
+                                    style="position: absolute; left: 0; top: 4px; color: #cd7f32; font-size: 1.3rem;"></i>
+                                <span style="font-weight: 800; color: #fff; font-size: 1.25rem;">黃詰霖</span>
+                                <span
+                                    style="font-size: 0.9rem; color: var(--text-muted); font-family: monospace;">(41170030H
+                                    / Lin)</span>
+                                <div
+                                    style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; font-size: 1.05rem;">
+                                    <div>• 天梯積分：<strong style="color: var(--secondary);" id="p2-elo">1343.6</strong> 分
+                                    </div>
+                                    <div>• 班級排名：<strong style="color: #cd7f32;" id="p2-rank">第 3 名 (季軍 🥉)</strong>
+                                    </div>
+                                    <div>• 個人戰績：<span id="p2-stats" style="color: var(--text-muted);">42勝 / 0敗 /
+                                            0和</span></div>
+                                    <div>• 個人勝率：<strong style="color: var(--secondary);" id="p2-rate">100.0%</strong>
+                                    </div>
+                                </div>
+                            </li>
+                        </ul>
+
+                        <div
+                            style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px; font-size: 1.05rem; display: flex; justify-content: space-between; align-items: center;">
+                            <span>雙人小組平均積分：</span>
+                            <strong
+                                style="color: var(--accent); font-size: 1.2rem; text-shadow: 0 0 8px rgba(255,0,127,0.4);"
+                                id="group-avg-elo">1565.6 分</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Footer / Navigation Controls -->
+        <footer>
+            <div class="shortcuts-tip">
+                <span>快速鍵支援:</span>
+                <span><kbd><i class="fa-solid fa-arrow-left"></i></kbd> 上一張</span>
+                <span><kbd><i class="fa-solid fa-arrow-right"></i></kbd> / <kbd>Space</kbd> 下一張</span>
+            </div>
+
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="nav-progress"></div>
+            </div>
+
+            <div class="controls">
+                <button class="btn-control" id="btn-prev" onclick="prevSlide()"><i
+                        class="fa-solid fa-chevron-left"></i></button>
+                <button class="btn-control" id="btn-next" onclick="nextSlide()"><i
+                        class="fa-solid fa-chevron-right"></i></button>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            // Dictionary of SVG paths for our icons (fully offline-safe FontAwesome replacement)
+            const svgPaths = {
+                "fa-chess-knight": '<path d="M19 22H5V20H19V22M17 10C17 13.9 14.5 17.2 11 18.5V17H9V19H11.5C15.1 17.7 17.5 14.2 17.5 10H17M11 6C11 7.1 10.1 8 9 8S7 7.1 7 6 7.9 4 9 4 11 4.9 11 6M19 10C19 8.3 17.7 7 16 7H15V6C15 3.8 13.2 2 11 2S7 3.8 7 6V7H6C4.3 7 3 8.3 3 10C3 11.2 3.7 12.3 4.7 12.8L4 16.5C3.8 17.3 4.4 18 5.2 18H10.8C11.6 18 12.2 17.3 12 16.5L11.3 12.8C12.3 12.3 13 11.2 13 10V9H14C14.6 9 15 9.4 15 10V11H17V10H19Z"/>',
+                "fa-bolt": '<path d="M11 21h-1l1-7H7.5c-.83 0-1.2-.53-.94-1.03L13 3h1l-1 7h3.5c.83 0 1.2.53.94 1.03L11 21z"/>',
+                "fa-arrow-right": '<path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/>',
+                "fa-arrow-left": '<path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>',
+                "fa-chevron-left": '<path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>',
+                "fa-chevron-right": '<path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>',
+                "fa-gamepad": '<path d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H8v3H6v-3H3v-2h3V8h2v3h3v2zm4.5 2c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm3-3c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/>',
+                "fa-table-cells": '<path d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM8 20H4v-4h4v4zm0-6H4v-4h4v4zm0-6H4V4h4v4zm6 12h-4v-4h4v4zm0-6h-4v-4h4v4zm0-6h-4V4h4v4zm6 12h-4v-4h4v4zm0-6h-4v-4h4v4zm0-6h-4V4h4v4z"/>',
+                "fa-trophy": '<path d="M18 2H6c-1.1 0-2 .9-2 2v3c0 2.24 1.76 4.09 4 4.42V16H5v2h14v-2h-3v-4.58c2.24-.33 4-2.18 4-4.42V4c0-1.1-.9-2-2-2zm-8 5H6V4h4v3zm8 0h-4V4h4v3z"/>',
+                "fa-gauge-high": '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 14H11V8h2v8zm3.07-5.57l-1.41 1.41C15.89 12.39 16 12.7 16 13c0 2.21-1.79 4-4 4s-4-1.79-4-4 1.79-4 4-4c.3 0 .61.01.91.13l1.41-1.41C13.43 7.27 12.73 7 12 7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6c0-.73-.27-1.43-.72-2.07z"/>',
+                "fa-brain": '<path d="M12 3c-4.97 0-9 4.03-9 9 0 2.12.74 4.07 1.97 5.61L4.35 19.4c-.39.39-.39 1.02 0 1.41.39.39 1.02.39 1.41 0l1.9-1.9C9.07 19.64 10.47 20 12 20c4.97 0 9-4.03 9-9s-4.03-9-9-9zm0 15c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/>',
+                "fa-gears": '<path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22-.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/>',
+                "fa-scissors": '<path d="M6 2c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.03-.81L10 9l-1.97 1.81C7.5 10.31 6.79 10 6 10c-1.66 0-3 1.34-3 3s1.34 3 3 3c1.36 0 2.51-.9 2.87-2.13L11 12.5l5 4.5h5v-2h-3l-4-3.5 4-3.5h3V6h-5l-5 4.5-2.13-1.37C8.51 7.9 7.36 7 6 7zm0 4c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm0 8c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z"/>',
+                "fa-sort": '<path d="M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z"/>',
+                "fa-clock": '<path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>',
+                "fa-memory": '<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 16H5V5h12v4h-2V7h-2v2h-2V7H9v2H7V5h10v14z"/>',
+                "fa-circle-nodes": '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-1.41 1.41C12.54 13.77 12 14.5 12 16h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z"/>',
+                "fa-calculator": '<path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 14H7v-2h10v2zm0-4H7v-2h10v2zm0-4H7V7h10v2z"/>',
+                "fa-graduation-cap": '<path d="M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82zM12 3L1 9l11 6 9-4.91V17h2V9L12 3z"/>',
+                "fa-sliders": '<path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>',
+                "fa-chart-line": '<path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.09-4-4L3 14.07l.5 4.42z"/>',
+                "fa-chess": '<path d="M19 22H5v-2h14v2M12 2a4 4 0 0 0-4 4 4 4 0 0 0 .18 1.18c-.89.58-1.52 1.54-1.63 2.67l-.5 4.5a3 3 0 0 0 2.2 3.2v2.45h7.5V17.5a3 3 0 0 0 2.2-3.2l-.5-4.5c-.11-1.13-.74-2.09-1.63-2.67A4 4 0 0 0 16 6a4 4 0 0 0-4-4z"/>',
+                "fa-medal": '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm1-13h-2v6h2V7zm0 8h-2v2h2v-2z"/>'
+            };
+
+            // Find all <i> tags representing icons and replace them with embedded SVGs
+            document.querySelectorAll("i[class*='fa-']").forEach(iconEl => {
+                let iconName = "";
+                iconEl.classList.forEach(cls => {
+                    if (cls.startsWith("fa-")) iconName = cls;
+                });
+                if (svgPaths[iconName]) {
+                    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                    svg.setAttribute("viewBox", "0 0 24 24");
+                    svg.setAttribute("fill", "currentColor");
+                    svg.classList.add("svg-icon");
+                    iconEl.classList.forEach(cls => {
+                        if (!cls.startsWith("fa-") && cls !== "fa-solid" && cls !== "fa-regular") {
+                            svg.classList.add(cls);
+                        }
+                    });
+                    if (iconEl.getAttribute("style")) {
+                        svg.setAttribute("style", iconEl.getAttribute("style"));
+                    }
+                    svg.innerHTML = svgPaths[iconName];
+
+                    svg.style.width = svg.style.width || "1.1em";
+                    svg.style.height = svg.style.height || "1.1em";
+                    svg.style.display = "inline-block";
+                    svg.style.verticalAlign = "-0.15em";
+                    svg.style.position = svg.style.position || iconEl.style.position;
+
+                    iconEl.parentNode.replaceChild(svg, iconEl);
+                }
+            });
+        });
+
+        const totalSlides = 8;
+        let currentSlide = 1;
+
+        // Slide navigation
+        function showSlide(n) {
+            if (n < 1) n = 1;
+            if (n > totalSlides) n = totalSlides;
+            currentSlide = n;
+
+            // Update DOM slide visibility
+            document.querySelectorAll('.slide').forEach(s => s.classList.remove('active'));
+            document.getElementById(`slide-${currentSlide}`).classList.add('active');
+
+            // Update counters and controls
+            document.getElementById('current-slide-num').innerText = currentSlide;
+            document.getElementById('btn-prev').disabled = (currentSlide === 1);
+            document.getElementById('btn-next').disabled = (currentSlide === totalSlides);
+
+            // Update footer progress bar
+            const pct = ((currentSlide - 1) / (totalSlides - 1)) * 100;
+            document.getElementById('nav-progress').style.width = `${pct}%`;
+
+            // Default to D4 timeline when entering slide 2
+            if (currentSlide === 2) {
+                setTimeline(0);
+            }
+        }
+
+        function nextSlide() {
+            if (currentSlide < totalSlides) {
+                showSlide(currentSlide + 1);
+            }
+        }
+
+        function prevSlide() {
+            if (currentSlide > 1) {
+                showSlide(currentSlide - 1);
+            }
+        }
+
+        // Keyboard listeners
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
+                nextSlide();
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                prevSlide();
+            }
+        });
+
+        // Slide 2: Timeline Controller
+        function setTimeline(idx) {
+            // Update dots
+            const nodes = document.querySelectorAll('.timeline-node');
+            nodes.forEach((n, i) => {
+                n.classList.remove('active', 'completed');
+                if (i < idx) n.classList.add('completed');
+                if (i === idx) n.classList.add('active');
+            });
+
+            // Update progress line
+            const pct = (idx / 2) * 90;
+            document.getElementById('tl-progress').style.transform = `scaleX(${pct / 90})`;
+
+            // Update text panes
+            const panes = document.querySelectorAll('.timeline-pane');
+            panes.forEach((p, i) => {
+                p.classList.remove('active');
+                if (i === idx) p.classList.add('active');
+            });
+        }
+
+        // Draw Slide 5 Middlegame Board
+        function drawMiddlegameBoard() {
+            const boardEl = document.getElementById('endgame-board');
+            if (!boardEl) return;
+            boardEl.innerHTML = '';
+
+            // White pieces: King on g1 (6), Queen on f3 (21), Knight on c3 (18)
+            // Black pieces: King on e8 (60), Queen on d8 (59), Knight on a6 (40)
+            const pieces = {
+                60: { type: 'king', color: 'black', icon: 'fa-chess-king', score: '-19734' },
+                59: { type: 'queen', color: 'black', icon: 'fa-chess-queen', score: '-1717' },
+                40: { type: 'knight', color: 'black', icon: 'fa-chess-knight', score: '-94' },
+                21: { type: 'queen', color: 'white', icon: 'fa-chess-queen', score: '+1792' },
+                18: { type: 'knight', color: 'white', icon: 'fa-chess-knight', score: '+134' },
+                6: { type: 'king', color: 'white', icon: 'fa-chess-king', score: '+19876' }
+            };
+
+            for (let r = 7; r >= 0; r--) {
+                for (let c = 0; c < 8; c++) {
+                    const sqIndex = r * 8 + c;
+                    const cell = document.createElement('div');
+                    cell.className = `endgame-cell ${(r + c) % 2 === 0 ? 'dark' : 'light'}`;
+
+                    // Set inner border radius on the 4 corner cells to fit the board rounded borders perfectly
+                    if (r === 7 && c === 0) cell.style.borderTopLeftRadius = '6px';
+                    if (r === 7 && c === 7) cell.style.borderTopRightRadius = '6px';
+                    if (r === 0 && c === 0) cell.style.borderBottomLeftRadius = '6px';
+                    if (r === 0 && c === 7) cell.style.borderBottomRightRadius = '6px';
+
+                    if (c === 0) {
+                        const rankLabel = document.createElement('span');
+                        rankLabel.className = 'cell-tag rank';
+                        rankLabel.innerText = r + 1;
+                        cell.appendChild(rankLabel);
+                    }
+                    if (r === 0) {
+                        const fileLabel = document.createElement('span');
+                        fileLabel.className = 'cell-tag file';
+                        fileLabel.innerText = String.fromCharCode(97 + c);
+                        cell.appendChild(fileLabel);
+                    }
+
+                    if (pieces[sqIndex]) {
+                        const piece = pieces[sqIndex];
+                        const pieceChar = {
+                            'king': '♚',
+                            'queen': '♛',
+                            'knight': '♞'
+                        }[piece.type] || '♟';
+
+                        const pieceEl = document.createElement('span');
+                        pieceEl.className = `endgame-piece ${piece.color}`;
+                        pieceEl.innerText = pieceChar;
+                        cell.appendChild(pieceEl);
+
+                        const badge = document.createElement('span');
+                        badge.className = `endgame-badge ${piece.color}`;
+                        badge.innerText = piece.score;
+                        cell.appendChild(badge);
+                    }
+
+                    boardEl.appendChild(cell);
+                }
+            }
+        }
+
+        // Slide 8: Fetch real-time ELO & Battle Stats Dashboard from ML Arena API
+        function updateSlide8FromAPI() {
+            const apiStatus = document.getElementById("api-status");
+            const apiStatusDot = document.getElementById("api-status-dot");
+
+            function setStatus(state, message) {
+                if (apiStatus) {
+                    apiStatus.innerText = message;
+                }
+                if (apiStatusDot) {
+                    if (state === 'green') {
+                        apiStatusDot.style.backgroundColor = '#10b981';
+                        apiStatusDot.style.boxShadow = '0 0 8px #10b981';
+                        if (apiStatus) apiStatus.style.color = '#10b981';
+                    } else if (state === 'yellow') {
+                        apiStatusDot.style.backgroundColor = '#f59e0b';
+                        apiStatusDot.style.boxShadow = '0 0 8px #f59e0b';
+                        if (apiStatus) apiStatus.style.color = '#f59e0b';
+                    } else { // red
+                        apiStatusDot.style.backgroundColor = '#ef4444';
+                        apiStatusDot.style.boxShadow = '0 0 8px #ef4444';
+                        if (apiStatus) apiStatus.style.color = 'var(--text-muted)';
+                    }
+                }
+            }
+
+            function displayData(p1, p2) {
+                if (p1) {
+                    document.getElementById("p1-elo").innerText = p1.elo_rating.toFixed(1);
+                    document.getElementById("p1-rank").innerHTML = `第 ${p1.rank} 名 (冠軍 🏆)`;
+                    document.getElementById("p1-stats").innerText = `${p1.wins}勝 / ${p1.losses}敗 / ${p1.draws}和`;
+                    document.getElementById("p1-rate").innerText = `${(p1.win_rate * 100).toFixed(2)}%`;
+                }
+                if (p2) {
+                    document.getElementById("p2-elo").innerText = p2.elo_rating.toFixed(1);
+                    document.getElementById("p2-rank").innerHTML = `第 ${p2.rank} 名 (季軍 🥉)`;
+                    document.getElementById("p2-stats").innerText = `${p2.wins}勝 / ${p2.losses}敗 / ${p2.draws}和`;
+                    document.getElementById("p2-rate").innerText = `${(p2.win_rate * 100).toFixed(2)}%`;
+                }
+
+                const p1_games = p1 ? p1.elo_games_played : 1173;
+                const p2_games = p2 ? p2.elo_games_played : 42;
+                const p1_wins = p1 ? p1.wins : 1164;
+                const p2_wins = p2 ? p2.wins : 42;
+                const p1_losses = p1 ? p1.losses : 5;
+                const p2_losses = p2 ? p2.losses : 0;
+                const p1_draws = p1 ? p1.draws : 4;
+                const p2_draws = p2 ? p2.draws : 0;
+
+                const totalGames = p1_games + p2_games;
+                const totalWins = p1_wins + p2_wins;
+                const totalLosses = p1_losses + p2_losses;
+                const totalDraws = p1_draws + p2_draws;
+                const groupRate = (totalWins / totalGames) * 100;
+
+                document.getElementById("group-total-games").innerText = totalGames.toLocaleString();
+                document.getElementById("group-win-rate").innerText = `${groupRate.toFixed(2)}%`;
+                document.getElementById("group-wld").innerText = `${totalWins}勝 / ${totalLosses}敗 / ${totalDraws}和`;
+
+                const p1_elo = p1 ? p1.elo_rating : 1787.6;
+                const p2_elo = p2 ? p2.elo_rating : 1343.6;
+                const avgElo = (p1_elo + p2_elo) / 2;
+                document.getElementById("group-avg-elo").innerText = `${avgElo.toFixed(1)} 分`;
+            }
+
+            // Start connection attempt
+            setStatus('yellow', 'API 連線中...');
+
+            function tryFetch(url, fallbackFn) {
+                fetch(url)
+                    .then(res => {
+                        if (!res.ok) {
+                            throw new Error('HTTP status ' + res.status);
+                        }
+                        return res.json();
+                    })
+                    .then(data => {
+                        if (data && data.error) {
+                            setStatus('yellow', 'API 伺服器異常 (使用靜態緩存)');
+                            console.warn("Proxy returned error:", data.error);
+                            return;
+                        }
+                        if (!Array.isArray(data)) {
+                            setStatus('yellow', 'API 資料格式錯誤 (使用靜態緩存)');
+                            console.warn("Data is not an array:", data);
+                            return;
+                        }
+                        // Success!
+                        let p1 = null;
+                        let p2 = null;
+                        data.forEach((item, idx) => {
+                            item.rank = idx + 1;
+                            if (item.username === "41241213S") p1 = item;
+                            if (item.username === "41170030H") p2 = item;
+                        });
+                        displayData(p1, p2);
+                        setStatus('green', 'API 連線正常 (數據已同步)');
+                    })
+                    .catch(err => {
+                        console.warn(`Failed fetch on ${url}:`, err);
+                        if (fallbackFn) {
+                            fallbackFn();
+                        } else {
+                            // Final failure after trying all endpoints
+                            setStatus('red', 'API 連線失敗 (使用靜態緩存)');
+                        }
+                    });
+            }
+
+            // Try sequence: localhost -> 127.0.0.1 -> relative
+            tryFetch('http://localhost:8082/api/leaderboard', () => {
+                tryFetch('http://127.0.0.1:8082/api/leaderboard', () => {
+                    tryFetch('/api/leaderboard', null);
+                });
+            });
+        }
+
+        // Initialize presentation
+        showSlide(1);
+        drawMiddlegameBoard();
+        updateSlide8FromAPI();
+    </script>
+</body>
+
+</html>
