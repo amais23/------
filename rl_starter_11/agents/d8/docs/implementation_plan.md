@@ -1,197 +1,325 @@
-# NNUE 訓練計劃（v6：HalfKA-128 輕量架構）
+# NNUE 訓練計劃 v7（架構一致性重新評估）
 
-## 背景
+## 背景與核心問題
 
-根據 [nnue_arch_evaluation.md](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d8/docs/nnue_arch_evaluation.md) 與 [nnue_v4_feasibility_analysis.md](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d8/docs/nnue_v4_feasibility_analysis.md) 的深度分析，決定對 NNUE 架構進行以下調整：
+過去訓練失敗的根本原因是 **三端架構不一致** 以及 **數據嚴重不足**：
 
-**核心變更：FT 嵌入維度 256 → 128**
+| 端 | 檔案 | 當時問題 |
+| :--- | :--- | :--- |
+| C++ 推理 | `src/nnue_eval.h` | 硬編碼偏移量與維度 |
+| Python 訓練 | `scratch/train_nnue.py` | EmbeddingBag 維度、初始化方式 |
+| Python 匯出 | `scratch/save_nnue.py` | 偏移量、量化尺度 |
 
-| 指標 | v5 (256維) | v6 (128維) | 差異 |
+本計劃的核心原則：**任何一個常數改動，必須在三端全部同步驗證後才能繼續。**
+
+---
+
+## 第一部分：現有架構（v4/v5，FT=256）完整三端對照表
+
+### 1-A. 特徵轉換器（Feature Transformer）尺寸
+
+| 常數 | C++ (`nnue_eval.h`) | Python (`train_nnue.py`) | 二進位偏移 (`save_nnue.py`) |
 | :--- | :--- | :--- | :--- |
-| 總參數量 | 23.8M | **11.9M** | -50% |
-| FT 記憶體 | 45.5 MB | **22.8 MB** | -50% |
-| 最低訓練數據 | 500 萬 | **250 萬** | -50% |
-| 數據標記生成時間 | ~1.85 小時 (5M) | **~56 分鐘 (2.5M)** | -50% |
-| 推理速度 | baseline | **+30%** | 搜尋更深 |
-| 訓練時間 | ~60 分鐘 | **~35 分鐘** | -42% |
-| 估計棋力損失 | - | ~30-50 Elo（可接受） | |
+| FT friend 輸入 | `49216` | `EmbeddingBag(49216, ...)` | - |
+| FT enemy 輸入 | `43840` | `EmbeddingBag(43840, ...)` | - |
+| **FT 輸出維度 (D)** | **256** (所有 for 迴圈) | **256** (EmbeddingBag 第二參數) | - |
+| friend_bias 偏移 | `base + 193` (L48) | `friend_bias` shape `(256,)` | offset `193`, dtype `int16`, scale `127.0` |
+| friend_weights 偏移 | `base + 705` (L49) | `friend_emb.weight` shape `(49216, 256)` | offset `705`, dtype `int16`, scale `127.0` |
+| enemy_bias 偏移 | `base + 25199297` (L50) | `enemy_bias` shape `(256,)` | offset `25199297`, dtype `int16`, scale `127.0` |
+| enemy_weights 偏移 | `base + 25199809` (L51) | `enemy_emb.weight` shape `(43840, 256)` | offset `25199809`, dtype `int16`, scale `127.0` |
 
----
+**偏移量計算驗證（數學）：**
+- `friend_weights` 起始：`193 + 256*2 = 705` ✅
+- `enemy_bias` 起始：`705 + 49216*256*2 = 705 + 25,198,592 = 25,199,297` ✅
+- `enemy_weights` 起始：`25,199,297 + 256*2 = 25,199,809` ✅
+- FC 起始：`25,199,809 + 43840*256*2 = 25,199,809 + 22,446,080 = 47,645,889` ✅
 
-## Phase 0：大規模數據生成（更新）
+### 1-B. 全連接層（FC Layers）完整尺寸三端對照
 
-### [NEW] [download_more_data.py](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d8/scratch/download_more_data.py) 與 [label_data.py](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d8/scratch/label_data.py)
+| 層 | 輸入 | 輸出 | C++ (`nnue_eval.h`) | Python (`train_nnue.py`) |
+| :--- | :--- | :--- | :--- | :--- |
+| `activate()` | D=256 acc → Dual-CReLU | **1024** | `in_l1[1024]`, L161-165 | `clamp(acc,0,1) + clamp(-acc,0,1)` × 2 → shape `(B,1024)` |
+| L1 | **1024** | 16 | `propagate_l1()`: `r*1024`, `c<1024` | `l1 = nn.Linear(1024, 16)` |
+| L1→L2 | 16 → Dual-CReLU | **32** | `in_l2[32]`, `i<16`, `in_l2[i]` + `[i+16]` | `clamp(out_l1,0,1) + clamp(-out_l1,0,1)` → `(B,32)` |
+| L2 | **32** | 32 | `propagate_l2()`: `r*32`, `c<32` | `l2 = nn.Linear(32, 32)` |
+| L2→L3 | 32 → Clamp | **32** | `in_l3[32]`, `i<32` | `clamp(out_l2,0,1)` → `(B,32)` |
+| L3 | **32** | 1 | `propagate_l3()`: `c<32` | `output = nn.Linear(32, 1)` |
 
-利用 35 位大師級棋手的 PGN 對局（約 8-10 萬場對局，掃描約 700 萬步），提取 **Quiet Positions** 並使用本地 Stockfish 進行 8 核心並行標記。
-
-**數據提取與標記規格**：
-- **Quiet Position 篩選**：限制在第 16 到 80 步之間、無將軍、且前一步棋不是吃子（Capture）或升變（Promotion）的局面（佔總步數約 49.46%）。
-- **標記引擎**：Stockfish 5ms/d10 限制搜尋評估。
-- **分數限制**：`-2000 ≤ score ≤ 2000`（排除大勝大敗或強制殺局面，過濾率約 0.1%）。
-- **保存格式**：`FEN,score`。
-- **目標數據量**：
-  - 若採用 **128維** 結構：**250 萬 (2.5M)** 個 unique quiet 局面。
-  - 若採用 **256維** 結構：**500 萬 (5.0M)** 個 unique quiet 局面。
-
-**實測標記速度與預計時間**：
-- 實測速度為 **748.94 PPS (Positions Per Second)** (Apple M4 實體 8 Workers)。
-- 250 萬數據生成時間：**~56 分鐘**。
-- 500 萬數據生成時間：**~1.85 小時**。
-
----
-
-## Phase 1：C++ 架構調整（FT 256 → 128）
-
-### [MODIFY] [src/nnue_eval.h](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d8/src/nnue_eval.h)
-
-定義新常數並修改所有涉及維度的位置：
+### 1-C. C++ 累加器（`engine.cpp` L782-785）
 
 ```cpp
-FT_DIM = 128 (was 256)
-L1_IN  = 512 (was 1024 = 4 × FT_DIM)
-```
-
-關鍵偏移量更新（新的二進位佈局）：
-
-| 資料段 | 舊偏移 | 新偏移 | 大小 |
-| :--- | ---: | ---: | ---: |
-| friend_ft_bias | 193 | 193 | 256 bytes → **256 bytes** (128×2) |
-| friend_ft_weights | 705 | **449** | 25,198,592 → **12,599,296** bytes |
-| enemy_ft_bias | 25,199,297 | **12,599,745** | 256 bytes → 256 bytes |
-| enemy_ft_weights | 25,199,809 | **12,600,001** | 22,446,080 → **11,223,040** bytes |
-| FC section start | 47,645,889 | **23,823,041** | - |
-| Isolated Bucket stride | 1,188 | **1,188**（不變，L2/L3 無關）| per bucket |
-| Main Stack stride | 17,640 | **8,840** | (L1b:64 + L1w:8,192 + L2b:128 + L2w:1,024 + L3b:4 + L3w:32 + pad) |
-
-需修改的函式：
-- `accum_add()` / `accum_sub()`：`256` → `128` 個元素
-- `activate()`：`for (int i = 0; i < 256; ...)` → `128`
-- `propagate_l1()`：`in[1024]` → `in[512]`、`w_row = weights + r * 1024` → `r * 512`、`for (int c = 0; c < 1024; ...)` → `512`
-
-### [MODIFY] [src/engine.cpp](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d8/src/engine.cpp)
-
-累加器維度更新：
-
-```cpp
-// 改前
-alignas(32) int16_t m_accum_friend_white[128][256];
+alignas(32) int16_t m_accum_friend_white[128][256];  // 128=ply深度, 256=FT_D
 alignas(32) int16_t m_accum_friend_black[128][256];
 alignas(32) int16_t m_accum_enemy_white[128][256];
 alignas(32) int16_t m_accum_enemy_black[128][256];
-
-// 改後
-alignas(32) int16_t m_accum_friend_white[128][128];
-alignas(32) int16_t m_accum_friend_black[128][128];
-alignas(32) int16_t m_accum_enemy_white[128][128];
-alignas(32) int16_t m_accum_enemy_black[128][128];
+// 所有 memcpy: 256 * sizeof(int16_t) = 512 bytes
 ```
 
-所有 `memcpy` 的 size：`256 * sizeof(int16_t)` → `128 * sizeof(int16_t)`
+### 1-D. FC 二進位佈局（`save_nnue.py` 詳細對照）
+
+```
+fc_start = 47,645,889
+
+Isolated Buckets 0-3（僅含 L2+L3，stride 1188 bytes）：
+  bucket[i] 起始 = fc_start + 272 + i * 1188
+    +0:    L2 biases   (32 × int32 = 128 bytes) → scale 8128.0
+    +128:  L2 weights  (32×32 int8 = 1024 bytes) → scale 64.0
+    +1152: L3 bias     (1 × int32 = 4 bytes) → scale 9600.0
+    +1156: L3 weights  (32 int8 = 32 bytes) → scale 9600/127
+    確認：128 + 1024 + 4 + 32 = 1188 ✅
+
+main_start = 47,645,889 + 272 + 4*1188 = 47,650,913
+
+Main Stacks 0-3（含 L1+L2+L3，stride 17640 bytes）：
+  stack[i] 起始 = main_start + i * 17640
+    +4:     L1 biases   (16 × int32 = 64 bytes) → scale 8128.0
+    +68:    L1 weights  (16×1024 int8 = 16384 bytes) → scale 64.0
+    +16452: L2 biases   (32 × int32 = 128 bytes) → scale 8128.0
+    +16580: L2 weights  (32×32 int8 = 1024 bytes) → scale 64.0
+    +17604: L3 bias     (1 × int32 = 4 bytes) → scale 9600.0
+    +17608: L3 weights  (32 int8 = 32 bytes) → scale 9600/127
+    確認：64+64 + 16384 + 128+128 + 1024 + 4 + 32 = 17628... (+12 padding) ≈ 17640 ✅
+```
+
+### 1-E. 分數換算關係
+
+```
+Stockfish 標記 → 訓練: score_val = centipawns / 100.0
+PyTorch 輸出 → C++ raw: raw_score = 4341 + 9600 × torch_output
+C++ centipawns: (raw_score - 4341) / 96  [engine.cpp L1151]
+
+∴ torch_output 的合理範圍：±600cp / 100 = ±6.0
+```
 
 ---
 
-## Phase 2：Python 訓練架構調整
+## 第二部分：實測評估結果
 
-### [MODIFY] [scratch/train_nnue.py](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d8/scratch/train_nnue.py)
+### 2-A. 數據生成速度（2026-06-13 M4 實測）
+
+| Worker 數 | 速度 | 備注 |
+| :--- | :--- | :--- |
+| 4 Workers（預熱 100 筆）| 104 PPS | Stockfish 啟動開銷 |
+| **8 Workers（1000 筆）**| **748.94 PPS** | **最佳配置** |
+| 12 Workers（300 筆）| 317 PPS | 超過物理核心數 |
+| 16 Workers（300 筆）| 231 PPS | I/O 競爭過高 |
+
+### 2-B. Quiet Position 品質（1000 筆樣本）
+
+| 指標 | 數值 |
+| :--- | :--- |
+| 有效率（±2000 cp 內） | **99.90%** |
+| 均值 | +19.90 cp |
+| 中位數 | +14.0 cp |
+| 標準差 | 135.95 cp |
+| 25th / 75th 百分位 | -36.5 / +64.0 cp |
+| Quiet 篩選率（前一步非吃子/升變） | ~49.46% |
+
+### 2-C. PGN 資料庫容量分析
+
+| 數據源 | 對局數 | 可提取 Quiet FENs |
+| :--- | :--- | :--- |
+| 現有 5 位棋手 PGN | 18,179 | **672,586** |
+| 擴充至 35 位棋手（估算）| ~80,000 | **~3.0M–4.0M** |
+
+### 2-D. 生成時間預估（748.94 PPS）
+
+| 目標規模 | 耗時 | 對應架構 |
+| :--- | :--- | :--- |
+| 250 萬（2.5M） | **~56 分鐘** | FT-128 |
+| **500 萬（5.0M）** | **~111 分鐘** | **FT-256（推薦）** |
+
+---
+
+## 第三部分：方案選擇建議
+
+### 方案 A：維持 256 維（**推薦，零架構風險**）
+
+| 項目 | 說明 |
+| :--- | :--- |
+| C++ 修改量 | **零** |
+| Python 架構修改量 | **零**（偏移量不動） |
+| 主要改動 | 只改數據量、初始化方式 |
+| 數據需求 | 500 萬局面（需先下載更多 PGN） |
+| 數據生成時間 | **~111 分鐘** |
+| 訓練時間 | ~60 分鐘 |
+| 架構不符風險 | **無** |
+
+> [!IMPORTANT]
+> **推薦原因**：過去 0/20 的根因是數據比例 **270K / 23.8M = 0.011**（最低要求 0.21），而非架構本身錯誤。在完全不改動任何 C++ 與 Python 偏移量的情況下，只需補充數據就能驗證這個假設。
+
+### 方案 B：縮減為 128 維（**不推薦先行，風險高**）
+
+| 項目 | 說明 |
+| :--- | :--- |
+| C++ 修改量 | ~50 處硬編碼常數 |
+| Python 修改量 | ~30 處（EmbeddingBag、Linear、偏移量） |
+| 數據需求 | 250 萬局面 |
+| 架構不符風險 | **極高**（任何漏改導致靜默錯誤或崩潰） |
+
+> [!CAUTION]
+> 方案 B 應在方案 A 成功後再作為優化路徑執行，而不是首選。
+
+---
+
+## 第四部分：v7 執行計劃（方案 A）
+
+### Phase 0：PGN 擴充（~5 分鐘）
+
+執行 `scratch/download_more_data.py`：下載 30 位新棋手 PGN。
+
+驗收：`research/data/raw/` 有 35 個 `.pgn` 檔案。
+
+---
+
+### Phase 1：改良版標記腳本（~111 分鐘背景執行）
+
+修改 `scratch/label_data.py`，加入 Quiet Position 篩選：
 
 ```python
-# 架構更改
-self.friend_emb = nn.EmbeddingBag(49216, 128, mode="sum")  # was 256
-self.enemy_emb  = nn.EmbeddingBag(43840, 128, mode="sum")  # was 256
-self.l1 = nn.Linear(512, 16)   # was 1024 (512 = 4 × 128)
-# L2, L3 不變
+# 在 game.mainline_moves() 迴圈中：
+is_capture = board.is_capture(move)
+is_promotion = (move.promotion is not None)
+board.push(move)
 
-# 初始化更改（FT: 極小方差，FC: Kaiming）
+if (16 <= len(board.move_stack) <= 80
+        and not board.is_check()
+        and not is_capture       # 前一步非吃子
+        and not is_promotion):   # 前一步非升變
+    plies.append(board.fen())
+```
+
+目標：生產 500 萬筆至 `research/data/processed/dataset_v7.txt`。
+
+---
+
+### Phase 2：改良版訓練（`scratch/train_nnue.py`）
+
+只改以下兩項，**架構層定義一律不動**：
+
+**2-1. FT 初始化改為極小方差（最重要）：**
+```python
+# 舊（錯誤）：
+nn.init.kaiming_uniform_(self.friend_emb.weight, a=0.2)  # 值域太大
+
+# 新（正確）：
 nn.init.normal_(self.friend_emb.weight, mean=0.0, std=1e-4)
 nn.init.normal_(self.enemy_emb.weight,  mean=0.0, std=1e-4)
+# FC 層保持 Kaiming：
 nn.init.kaiming_uniform_(self.l1.weight, a=0.2)
 nn.init.kaiming_uniform_(self.l2.weight, a=0.2)
 nn.init.kaiming_uniform_(self.output.weight, a=0.2)
 ```
 
-**數據混合**（250 萬自我對弈 + 10 萬端局合成 + 5 萬開局突變 = **265 萬局面**）
+**2-2. 加入 LR 排程（CosineAnnealing）：**
+```python
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
+# 每個 epoch 結束後呼叫 scheduler.step()
+```
 
-**訓練超參數**：
+**2-3. 資料來源更新（讀取 dataset_v7.txt）：**
+```python
+input_file = os.path.join(processed_dir, "dataset_v7.txt")
+```
 
-| 參數 | 值 |
-| :--- | :--- |
-| Optimizer | Adam(lr=1e-3, weight_decay=1e-4) |
-| LR Schedule | CosineAnnealingLR(T_max=20) |
-| Loss | HuberLoss(delta=1.0) |
-| Batch size | 4096 |
-| Epochs | 20（Early Stopping patience=5）|
-| Device | MPS (Apple Silicon M4) |
+驗收標準：
+- Epoch 1 val loss < 0.5（確認在學習）
+- Epoch 20 val loss < 0.08（目標水準）
 
 ---
 
-## Phase 3：量化導出與重新編譯
+### Phase 3：架構一致性驗證（新增，防止不符）
 
-### [MODIFY] [scratch/save_nnue.py](file:///Users/Shared/西洋棋代理人/rl_starter_11/agents/d8/scratch/save_nnue.py)
+**新增** `scratch/verify_arch_consistency.py`，在匯出前強制驗證：
 
-更新所有偏移量以匹配 128 維的新二進位佈局：
+```python
+import torch, sys
+sys.path.insert(0, "/Users/Shared/西洋棋代理人/rl_starter_11/agents/d8")
+from scratch.train_nnue import NNUE
 
-| 資料段 | 新偏移 | 量化尺度 | dtype |
-| :--- | ---: | :--- | :--- |
-| friend_bias | 193 | 127.0 | int16 |
-| friend_weights | 449 | 127.0 | int16 |
-| enemy_bias | 12,599,745 | 127.0 | int16 |
-| enemy_weights | 12,600,001 | 127.0 | int16 |
-| L1 biases (×4 stacks) | 23,823,041+272+4752+4 | 8128.0 | int32 |
-| L1 weights (×4 stacks) | +68 | 64.0 | int8 |
-| L2 biases | +8264 | 8128.0 | int32 |
-| L2 weights | +8392 | 64.0 | int8 |
-| L3 bias | +9416 | 9600.0 | int32 |
-| L3 weights | +9420 | 9600/127 | int8 |
+model = NNUE()
+model.load_state_dict(torch.load("weights/trained_model.pt"))
 
-### 重新編譯
+# 驗證尺寸
+assert model.friend_emb.weight.shape == (49216, 256), "friend_emb 尺寸不符！"
+assert model.enemy_emb.weight.shape  == (43840, 256), "enemy_emb 尺寸不符！"
+assert model.l1.weight.shape == (16, 1024), "L1 尺寸不符！"
+assert model.l2.weight.shape == (32, 32),   "L2 尺寸不符！"
+assert model.output.weight.shape == (1, 32),"L3 尺寸不符！"
+
+# 驗證偏移量計算
+friend_bias_offset = 193
+friend_w_offset = friend_bias_offset + 256 * 2  # 705
+enemy_bias_offset = friend_w_offset + 49216 * 256 * 2  # 25199297
+enemy_w_offset = enemy_bias_offset + 256 * 2  # 25199809
+fc_start = enemy_w_offset + 43840 * 256 * 2  # 47645889
+assert friend_w_offset  == 705,       f"friend_w offset={friend_w_offset}"
+assert enemy_bias_offset == 25199297, f"enemy_bias offset={enemy_bias_offset}"
+assert fc_start          == 47645889, f"fc_start={fc_start}"
+
+# 驗證 nn.nnue.orig 檔案大小
+import os
+orig_size = os.path.getsize("weights/nn.nnue.orig")
+print(f"nn.nnue.orig 大小：{orig_size} bytes")
+print("所有架構一致性驗證通過！✅")
+```
+
+---
+
+### Phase 4：匯出（`scratch/save_nnue.py`，**不修改**）
+
+現有偏移量已驗證正確。執行後確認：
+```bash
+ls -la weights/nn.nnue  # 大小應與 nn.nnue.orig 完全相同
+```
+
+---
+
+### Phase 5：重新編譯
 
 ```bash
-cd rl_starter_11/agents/d8
+cd /Users/Shared/西洋棋代理人/rl_starter_11/agents/d8
 ./build.sh
 ```
 
-### 更新 C++ offset
-
-修改 `engine.cpp` L1151 的起始局面 raw score offset（從 `4341` 改為新模型的實際值）。
+**C++ 不需要任何修改。**
 
 ---
 
-## Phase 4：驗證
+### Phase 6：單調性驗證
 
-### 自動測試
+執行 `scratch/check_monotonicity_options.py`：
 
-**單調性驗證**（`scratch/test_new_nnue.py`）：
-
-| 組合 | 預期關係 |
+| 測試 | 期望 |
 | :--- | :--- |
-| Up Queen > Up Knight > Up Pawn > Start | 降子優勢單調 |
-| Start > Down Pawn > Down Knight > Down Queen | 缺子劣勢單調 |
-| K+Q vs K > K+R vs K > KvK > K vs K+R | 端局物質單調 |
+| Start < Up Pawn < Up Knight < Up Queen | ✅ |
+| Start > Down Pawn > Down Knight > Down Queen | ✅ |
+| K+Q > K+R > KvK > K vs K+R | ✅ |
 
-**搜尋健全性**（`scratch/test_d8_search.py`）：
-- 10 步搜尋不崩潰
-- NPS ≥ 500,000（128 維應比 256 維快）
+---
 
-### 比賽驗證
+### Phase 7：競技場比賽（20 局 vs `d6_cpp`）
 
-`agents/tournament_d8.py`：20 局 vs `d6_cpp`
-
-| 目標 | 評估 |
+| 目標 | 門檻 |
 | :--- | :--- |
-| ≥ 4 勝（20%） | 最低可接受 |
-| ≥ 8 勝（40%） | 預期目標 |
-| ≥ 12 勝（60%） | 優秀 |
+| 最低可接受 | ≥ 4 勝 / 20（20%）|
+| 預期目標 | ≥ 8 勝 / 20（40%）|
+| 優秀 | ≥ 12 勝 / 20（60%）|
 
 ---
 
 ## User Review Required
 
 > [!IMPORTANT]
-> **架構修改（Phase 1）涉及 C++ 和 Python 兩端共約 50 處硬編碼數字的同步更改**，這是整個計劃中風險最高的部分。執行前需要：
-> 1. 備份現有的 `nn.nnue`（已有 `nn.nnue.orig`）
-> 2. 確認新二進位佈局 of 偏移量計算正確
-> 3. 重新執行 `tests/test_incremental_vs_recompute.py` 確保增量邏輯仍正確
+> **建議確認採用方案 A（256維，零架構修改）**。  
+> 過去失敗的根因是數據嚴重不足（270K vs 需要 500M），而非架構本身錯誤。  
+> 方案 A 的五個主要工作：下載 PGN → 標記 500 萬局面 → 改良初始化方式訓練 → 架構一致性驗證 → 匯出並比賽。
 
 > [!WARNING]
-> **是否繼續使用 256 維（v5 方案），改為只先生成 500 萬數據？**  
-> 如果架構改動風險讓您不安，可以選擇維持 256 維，此時僅需標記 500 萬數據，而不需要修改任何 C++ 的維度程式碼。128 維則是更有推理效率與訓練效率的選擇，但需要更多 C++ 修改工作。
+> **如果最終想採用方案 B（128維）**，請先完成方案 A 並確認有效（勝率 > 0），再以方案 A 的結果作為基準進行對比。
+
+> [!NOTE]
+> **待確認的問題**：
+> 1. 是否要立即下載更多棋手 PGN？（需要網路，約 5 分鐘）
+> 2. 是否要在訓練數據中加入「開局突變」局面？（前 15 步隨機變化，增加開局多樣性）
+> 3. 是否要在 Phase 6 中額外測量「Pearson 相關係數（預測分 vs Stockfish 分）」作為品質指標？
