@@ -143,8 +143,69 @@ class NNUE(nn.Module):
 # ═══════════════════════════════════════════
 # Preprocessing & Training
 # ═══════════════════════════════════════════
+import random
+
+def generate_synthetic_endgames(num_samples=100000):
+    print(f"Generating {num_samples} synthetic endgame positions...")
+    samples = []
+    pieces_to_add = [
+        (chess.QUEEN, True, 9.0),
+        (chess.ROOK, True, 5.0),
+        (chess.BISHOP, True, 3.0),
+        (chess.KNIGHT, True, 3.0),
+        (chess.PAWN, True, 1.0),
+        (chess.QUEEN, False, -9.0),
+        (chess.ROOK, False, -5.0),
+        (chess.BISHOP, False, -3.0),
+        (chess.KNIGHT, False, -3.0),
+        (chess.PAWN, False, -1.0),
+        (None, None, 0.0)
+    ]
+    
+    squares = list(range(64))
+    
+    for _ in range(num_samples):
+        board = chess.Board(fen=None)
+        
+        # Place White King
+        wk_sq = random.choice(squares)
+        board.set_piece_at(wk_sq, chess.Piece(chess.KING, chess.WHITE))
+        
+        # Place Black King (must not be adjacent to White King)
+        bk_squares = [s for s in squares if s != wk_sq and chess.square_distance(s, wk_sq) > 1]
+        if not bk_squares:
+            continue
+        bk_sq = random.choice(bk_squares)
+        board.set_piece_at(bk_sq, chess.Piece(chess.KING, chess.BLACK))
+        
+        # Pick a random piece type to add
+        pt, color, score = random.choice(pieces_to_add)
+        
+        if pt is not None:
+            if pt == chess.PAWN:
+                valid_squares = [s for s in squares if s != wk_sq and s != bk_sq and 8 <= s <= 55]
+            else:
+                valid_squares = [s for s in squares if s != wk_sq and s != bk_sq]
+                
+            if not valid_squares:
+                continue
+            p_sq = random.choice(valid_squares)
+            board.set_piece_at(p_sq, chess.Piece(pt, color))
+            
+        board.turn = random.choice([chess.WHITE, chess.BLACK])
+        
+        # Target score is STM relative
+        target_score = score
+        if board.turn == chess.BLACK:
+            target_score = -target_score
+            
+        samples.append((board.fen(), target_score))
+        
+    return samples
+
 def preprocess_data():
-    if os.path.exists(preprocessed_file):
+    # Force rebuilding by ignoring the cache to fix the score negation bug
+    if False and os.path.exists(preprocessed_file):
         print(f"Loading preprocessed dataset from {preprocessed_file}...")
         return torch.load(preprocessed_file)
         
@@ -165,18 +226,25 @@ def preprocess_data():
         board = chess.Board(fen)
         is_white_pov = (board.turn == chess.WHITE)
         
-        # Normalize score: convert centipawns to STM (side-to-move) perspective.
-        # Stockfish scores are always white-relative (+ means white winning).
-        # NNUE uses STM convention: + means the current player is winning.
-        # So when it's black's turn, we NEGATE the score.
+        # The score in dataset.txt is already relative to the side to move (STM).
+        # We do NOT negate it when it is Black's turn.
         score_val = score / 100.0
-        if not is_white_pov:
-            score_val = -score_val
         
         us = get_piece_features(board, is_white_pov)
         them = get_enemy_features(board, is_white_pov)
         
         preprocessed_data.append((us, them, [score_val]))
+        
+    # Append synthetic endgames
+    synthetic_samples = generate_synthetic_endgames(100000)
+    for fen, target_score in tqdm(synthetic_samples):
+        board = chess.Board(fen)
+        is_white_pov = (board.turn == chess.WHITE)
+        
+        us = get_piece_features(board, is_white_pov)
+        them = get_enemy_features(board, is_white_pov)
+        
+        preprocessed_data.append((us, them, [target_score]))
         
     print(f"Saving preprocessed dataset to {preprocessed_file}...")
     torch.save(preprocessed_data, preprocessed_file)
@@ -198,7 +266,7 @@ def train():
     print(f"Using training device: {device}")
     
     model = NNUE().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
     criterion = nn.HuberLoss(delta=1.0)
     
     epochs = 20
@@ -249,3 +317,4 @@ def train():
 
 if __name__ == '__main__':
     train()
+
