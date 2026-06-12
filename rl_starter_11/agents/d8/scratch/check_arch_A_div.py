@@ -99,7 +99,7 @@ def test():
         print(f"\n================ Division Factor: {div} ================")
         results = {}
         for name, b in positions.items():
-            out = run_forward_arch_A('agents/d8/weights/nn.nnue', b, divide_factor=div)
+            out = run_forward_arch_A('weights/nn.nnue', b, divide_factor=div)
             results[name] = out
             
         print(f"  Start: {results['Start']} ({results['Start']/600.0:.2f} cp)")

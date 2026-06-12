@@ -160,10 +160,11 @@ inline int32_t floor_div_64(int32_t x) {
 
 inline void activate(const int16_t* acc, int8_t* out) {
     for (int i = 0; i < 256; i++) {
-        out[i] = std::clamp<int32_t>(acc[i], 0, 127);
-        out[i + 256] = std::clamp<int32_t>(-acc[i], 0, 127);
+        out[i]       = static_cast<int8_t>(std::clamp<int32_t>(acc[i],  0, 127));
+        out[i + 256] = static_cast<int8_t>(std::clamp<int32_t>(-acc[i], 0, 127));
     }
 }
+
 
 inline void propagate_l1(const int8_t* in, const int8_t* weights, const int32_t* biases, int32_t* out) {
     for (int r = 0; r < 16; r++) {

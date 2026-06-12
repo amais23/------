@@ -38,7 +38,7 @@ def get_enemy_features(board: chess.Board, is_white_pov: bool):
         enemy_indices.append(idx)
     return enemy_indices
 
-def py_evaluate(board: chess.Board, divide_mode='none', weights_path='agents/d8/weights/nn.nnue'):
+def py_evaluate(board: chess.Board, divide_mode='none', weights_path='weights/nn.nnue'):
     with open(weights_path, 'rb') as f:
         file_data = f.read()
     
@@ -103,22 +103,26 @@ def py_evaluate(board: chess.Board, divide_mode='none', weights_path='agents/d8/
 def test():
     positions = {
         'Start': chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
-        'Won': chess.Board("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
-        'Lost': chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1")
+        'Won (White up Q)': chess.Board("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        'Lost (White down Q)': chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1"),
+        'Up Pawn (Black d7 missing)': chess.Board("rnbqkbnr/ppp1pppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        'Down Pawn (White d2 missing)': chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPP1PPPP/RNBQKBNR w KQkq - 0 1"),
+        'Up Knight (Black g8 missing)': chess.Board("rnbqkb1r/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+        'Down Knight (White g1 missing)': chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKB1R w KQkq - 0 1")
     }
     
-    for mode in ['none', 'floor']:
-        print(f"\n--- Mode: {mode} ---")
-        scores = {}
-        for name, board in positions.items():
-            scores[name] = py_evaluate(board, divide_mode=mode)
-            print(f"  {name}: {scores[name]}")
-        
-        start = scores['Start']
-        won = scores['Won']
-        lost = scores['Lost']
-        print(f"  Won - Start: {won - start}")
-        print(f"  Start - Lost: {start - lost}")
+    print("\n================ Original Weights Monotonicity (Inverted Floor Mode) ================")
+    start_score = -py_evaluate(positions['Start'], divide_mode='floor')
+    print(f"Start: {start_score} (cp={start_score/6.0:.2f})")
+    
+    for name, board in positions.items():
+        if name == 'Start':
+            continue
+        raw = py_evaluate(board, divide_mode='floor')
+        score = -raw
+        diff = score - start_score
+        print(f"  {name:30} -> Score: {score:5} (cp={score/6.0:.2f}), Diff: {diff:+4} (cp={diff/6.0:+.2f})")
+
 
 if __name__ == '__main__':
     test()

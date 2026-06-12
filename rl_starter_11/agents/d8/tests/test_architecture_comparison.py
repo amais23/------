@@ -38,7 +38,7 @@ def get_enemy_features(board: chess.Board, is_white_pov: bool):
         enemy_indices.append(idx)
     return enemy_indices
 
-def eval_arch_A(board: chess.Board, divide_factor=1, weights_path='agents/d8/weights/nn.nnue'):
+def eval_arch_A(board: chess.Board, divide_factor=1, weights_path='weights/nn.nnue'):
     # Architecture A: 16x1024 L1 input (dual clipped ReLU)
     with open(weights_path, 'rb') as f:
         file_data = f.read()
@@ -98,7 +98,7 @@ def eval_arch_A(board: chess.Board, divide_factor=1, weights_path='agents/d8/wei
     out_l3 = np.dot(l3_weights.astype(np.int32), in_l3.astype(np.int32)) + l3_bias
     return out_l3
 
-def eval_arch_B(board: chess.Board, divide_factor=1, weights_path='agents/d8/weights/nn.nnue'):
+def eval_arch_B(board: chess.Board, divide_factor=1, weights_path='weights/nn.nnue'):
     # Architecture B: 32x512 L1 input (standard clipped ReLU)
     with open(weights_path, 'rb') as f:
         file_data = f.read()

@@ -39,7 +39,7 @@ def get_enemy_features(board: chess.Board, is_white_pov: bool):
         enemy_indices.append(idx)
     return enemy_indices
 
-def py_evaluate(board: chess.Board, weights_path='agents/d8/weights/nn.nnue'):
+def py_evaluate(board: chess.Board, weights_path='weights/nn.nnue'):
     with open(weights_path, 'rb') as f:
         file_data = f.read()
     

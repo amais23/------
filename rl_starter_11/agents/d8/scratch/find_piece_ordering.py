@@ -98,7 +98,7 @@ def run_forward_custom(file_data, board, pt_order, invert_us_color, invert_them_
     return out_l3
 
 def test():
-    with open('agents/d8/weights/nn.nnue', 'rb') as f:
+    with open('weights/nn.nnue.orig', 'rb') as f:
         file_data = f.read()
         
     positions = {

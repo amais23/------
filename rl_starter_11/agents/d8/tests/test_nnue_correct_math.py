@@ -124,4 +124,4 @@ def run_forward(path, board):
 
 if __name__ == '__main__':
     board = chess.Board()
-    run_forward('weights/nn.nnue', board)
+    run_forward('weights/nn.nnue.orig', board)

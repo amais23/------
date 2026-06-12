@@ -1148,7 +1148,7 @@ public:
                                  m_accum_friend_black[ply], m_accum_enemy_black[ply]);
     }
     
-    int score = raw_score - 2022;
+    int score = raw_score - 1911;
     return score;
   }
 
